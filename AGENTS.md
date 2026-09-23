@@ -72,34 +72,36 @@ never push them. Upstream updates are `git fetch` + rebase with our commits on t
 
 ### Inner loop (no image rebuild)
 
-1. Edit here. `npm run build` (fast; `node_modules` persists in the workspace
-   mount).
+1. Edit here. Before any `npm run build`, stop the isolated dev pair with
+   `scripts/dev-pair.sh stop`; the build guard refuses to remove `dist` while
+   that pair is live. The build itself is fast (`node_modules` persists in the
+   workspace mount).
 2. Gate on tests: `npm test` (and `npm run lint` for touched code).
 3. Spawn the isolated dev instance pair (sanctioned second-instance pattern:
-   distinct `PI_WEB_DATA_DIR`, `PI_WEB_SESSIOND_SOCKET`, and `PI_WEB_PORT`;
+   distinct `PI_WEB_DATA_DIR`, `PI_WEB_SESSIOND_SOCKET`, and web/API port;
    do NOT point them at `/data/pi-web` or the production socket):
 
    ```sh
-   D=/data/pi-web-dev
-   setsid nohup env PI_WEB_DATA_DIR=$D \
-     node /usr/local/lib/node_modules/@jmfederico/pi-web/dist/server/sessiond.js \
-     >>/home/node/pi-web-dev-sessiond.log 2>&1 &
-   sleep 4
-   setsid nohup env PI_WEB_HOST=0.0.0.0 PI_WEB_PORT=8599 \
-     PI_WEB_DATA_DIR=$D PI_WEB_SESSIOND_SOCKET=$D/sessiond.sock \
-     node /usr/local/lib/node_modules/@jmfederico/pi-web/dist/server/index.js \
-     >>/home/node/pi-web-dev-web.log 2>&1 &
-   sleep 3
-   curl -s http://127.0.0.1:8599/api/pi-web/health   # expect {"ok":true}
+   scripts/dev-pair.sh start   # UI http://localhost:8599/ , API :8598
+   scripts/dev-pair.sh stop    # only kills what this script started
    ```
 
-4. The user browses via their reverse proxy (container IP + port 8599; the IP
-   changes on container recreate). The dev instance has empty state: add a
-   project (e.g. `/workspace/pi-web`) and start sessions inside it. It reads
-   the same workspaces, so sessions created there are visible elsewhere too;
-   renames propagate live. `npm pack` is NOT run in the inner loop.
-
-The actual check runs in the browser against the isolated instance.
+   The script runs the working tree directly (tsx watch + Vite dev server, no
+   build needed) and hard-isolates every shared resource: data dir, daemon
+   socket, agent dir (cloned from production on first start so dev sessions
+   can run models), API port 8598, UI port 8599. It deliberately unsets the
+   inherited `PI_WEB_SESSIOND_SOCKET`/`PI_WEB_SESSIOND_PORT` before
+   overriding — in this container the ambient `PI_WEB_*`/`PI_CODING_AGENT_DIR`
+   values point at production, and a dev daemon resolving them would clobber
+   the production socket. Never launch the pair with an inherited environment.
+   Overrides: `PI_WEB_DEV_ROOT`, `PI_WEB_DEV_UI_PORT`, `PI_WEB_DEV_API_PORT`.
+   Logs: `$PI_WEB_DEV_ROOT/dev.log` (default `/tmp/pi-web-dev/dev.log`).
+4. The user browses the Vite dev server on port 8599 (container IP + port;
+   the IP changes on container recreate). The pair seeds its state from
+   production on first start, so the usual projects appear; sessions run in
+   the cloned agent dir, never in production's. The Vite dev server reads the
+   working tree, so iteration changes are live without a build. `npm pack` is
+   NOT run in the inner loop.
 
 ### Checkpoint
 
@@ -116,18 +118,24 @@ The actual check runs in the browser against the isolated instance.
   anything under `docker/`; image-build questions go through the user.
 - PWA/service-worker caching can hide a fresh `dist/client`: suspect the
   service worker before suspecting the build (hard reload / SW update).
-- Dev processes are unmanaged: `setsid nohup` children survive the spawning
-  shell but die with the container, are not restarted on crash, and are
-  killed by any sessiond restart of this container. Cleanup: `pkill -f
-  'dist/server/(sessiond|index).js'` (matches only the dev pair; the
-  production daemon runs via the `pi-web-sessiond` bin) and wipe the dev data
-  dir (`rm -rf /data/pi-web-dev`) when a fresh sandbox is wanted.
+- **Builds and the dev pair are mutually exclusive.** `npm run build` checks for
+  the isolated pair and refuses to run while it is live, because the build
+  removes `dist/` and the dev sessiond watches generated plugin files there.
+  Stop the pair before building, then start it again after verification.
+- Dev processes are unmanaged: the pair survives the spawning shell but dies
+  with the container, is not restarted on crash, and is killed by any
+  sessiond restart of this container. Cleanup: `scripts/dev-pair.sh stop`
+  (kills only its own process group; the production daemon runs via the
+  `pi-web-sessiond` bin and is never matched). Default dev state lives in
+  `/tmp/pi-web-dev` — ephemeral overlay state that evaporates on recreate,
+  so nothing lingers; point `PI_WEB_DEV_ROOT` at a persistent location only
+  if you want dev state to survive rebuilds, and clean it up explicitly.
 - Never restart the production session daemon to deploy iteration changes:
   it owns this session, and a daemon-only restart leaves the production web
   deployment broken (its required-Terminal-plugin gate goes into
   "session daemon unavailable" until a coordinated web/API restart + browser
   reload). Deploy by the checkpoint path instead.
 - The dev stack is ephemeral overlay state; it evaporates on recreate.
-  Long-lived artifacts like logs (under `/home/node`) and the dev data dir
-  (`/data/pi-web-dev`) live on the `/data` mount and must be cleaned up
-  explicitly.
+  With the default `PI_WEB_DEV_ROOT=/tmp/pi-web-dev` nothing needs cleanup.
+  Logs kept elsewhere (e.g. under `/home/node`) are persistent and must be
+  cleaned up explicitly.
