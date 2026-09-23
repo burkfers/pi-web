@@ -47,3 +47,66 @@ Never report failed, incomplete, or skipped verification as passing. Identify an
 - Project-local PI WEB core config should use one commit-able file: `<project>/.pi-web/config.json`.
 - Core features should add keys to these config files, not create one project file per feature.
 - Plugins may own separate project config files, such as `.pi-web/tasks.json`.
+
+---
+
+# pi-web — local working clone
+
+This checkout is the build source for the Docker container (`workspaces/pi-web`
+inside the image build context). Local patches are commits on top of upstream;
+never push them. Upstream updates are `git fetch` + rebase with our commits on top.
+
+## How to build
+
+### Workflow model
+
+- **Checkpoint (container image):** only proven, user-tested states. The image
+  is built from this tree, so the tree must be clean (committed) at every
+  checkpoint.
+- **Iteration (container overlay):** during development, patch the *installed*
+  PI WEB inside the running container
+  (`/usr/local/lib/node_modules/@jmfederico/pi-web` — it is on the ephemeral
+  overlay). Breaking it is fine: recreating the container from the checkpoint
+  image resets it.
+- **Invariant:** image rebuilds iff the tree is clean and the committed patch
+  is user-verified. The overlay is always uncommitted, un-checkpointed state.
+
+### Inner loop (no image rebuild)
+
+1. Edit here. `npm run build` (fast; `node_modules` persists in the workspace
+   mount).
+2. Gate on tests: `npm test` (and `npm run lint` for touched code).
+3. Push the fresh build into the running container's installed package:
+   replace its `dist/` wholesale (rsync --delete or clean rm+cp, never a
+   partial overlay of files).
+4. Reload the browser page. Client-only changes need no process restart.
+   Server changes require restarting the just web/API process (never restart
+   the session daemon casually; it owns this session).
+
+The actual check runs in the browser against real sessions. `npm pack` is NOT
+run in the inner loop.
+
+### Checkpoint
+
+1. Commit the patches in this tree (the tree is exactly what was tested).
+2. User rebuilds the image (`docker compose build` from the container's build
+   directory) and recreates the container.
+3. The new image becomes the rollback baseline for the next cycle.
+
+### Hazards
+
+- **The `docker/` directory in this checkout is a trap.** It looks like the image
+  build (Dockerfile, compose, install.sh) but it is NOT what runs. The real
+  build/setup lives on the host, invisibly. Do not read, edit, or reason from
+  anything under `docker/`; image-build questions go through the user.
+- PWA/service-worker caching can hide a fresh `dist/client`: suspect the
+  service worker before suspecting the build (hard reload / SW update).
+- The dist-swap may drift from what `npm pack`/the published layout ships
+  (e.g. the image excludes `dist/**/*.testSupport.*`). Do not add
+  dependencies or `files` changes mid-iteration; they only take effect in the
+  image cycle.
+- After overlay iterations the installed `LOCAL_BUILD` stamp no longer
+  reflects reality; rewrite it on each dist-swap if identifying the running
+  build matters.
+- `pi` (peer dep `@earendil-works/pi-coding-agent`) is linked from the
+  installed package's `node_modules` — overlay dist-swaps must not touch that.
