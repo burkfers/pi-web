@@ -25,7 +25,9 @@ export class SettingsDialog extends LitElement {
   @property({ attribute: false }) machineRuntime: MachineRuntime | undefined;
   @property({ attribute: false }) hiddenNavigationSections: readonly NavigationSection[] = [];
   @property({ type: Boolean }) eventGroupsExpandedByDefault = false;
+  @property({ type: Boolean }) thinkingPartsExpandedByDefault = true;
   @property({ attribute: false }) onToggleEventGroupsExpandedByDefault?: (expanded: boolean) => void | Promise<void>;
+  @property({ attribute: false }) onToggleThinkingPartsExpandedByDefault?: (expanded: boolean) => void | Promise<void>;
   @property({ attribute: false }) onNavigate?: (section: SettingsSection) => void;
   @property({ attribute: false }) onClose?: () => void;
   @property({ attribute: false }) onConfigSaved?: (config: PiWebConfigValues) => void;
@@ -206,7 +208,9 @@ export class SettingsDialog extends LitElement {
         .hiddenNavigationSections=${this.hiddenNavigationSections}
         .onToggleNavigationSection=${(section: NavigationSection, hidden: boolean) => this.onToggleNavigationSection?.(section, hidden)}
         .eventGroupsExpandedByDefault=${this.eventGroupsExpandedByDefault}
+        .thinkingPartsExpandedByDefault=${this.thinkingPartsExpandedByDefault}
         .onToggleEventGroupsExpandedByDefault=${(expanded: boolean) => this.onToggleEventGroupsExpandedByDefault?.(expanded)}
+        .onToggleThinkingPartsExpandedByDefault=${(expanded: boolean) => this.onToggleThinkingPartsExpandedByDefault?.(expanded)}
       ></settings-general-panel>
     `;
   }

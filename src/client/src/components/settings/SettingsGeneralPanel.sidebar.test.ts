@@ -51,26 +51,39 @@ describe("settings-general-panel sidebar", () => {
 });
 
 describe("settings-general-panel chat", () => {
-  it("reflects the stored expanded-by-default preference and toggles it through the callback", async () => {
-    const toggles: boolean[] = [];
+  it("reflects browser-local transcript preferences and toggles them through the callbacks", async () => {
+    const groupToggles: boolean[] = [];
+    const thinkingToggles: boolean[] = [];
     const panel = new SettingsGeneralPanel();
     panel.configResponse = configResponse({ host: "127.0.0.1" });
     panel.eventGroupsExpandedByDefault = true;
-    panel.onToggleEventGroupsExpandedByDefault = (expanded) => { toggles.push(expanded); };
+    panel.thinkingPartsExpandedByDefault = false;
+    panel.onToggleEventGroupsExpandedByDefault = (expanded) => { groupToggles.push(expanded); };
+    panel.onToggleThinkingPartsExpandedByDefault = (expanded) => { thinkingToggles.push(expanded); };
     document.body.append(panel);
     await panel.updateComplete;
 
     const fields = [...(panel.shadowRoot?.querySelectorAll<HTMLLabelElement>('section[aria-label="Chat settings"] .toggle-field') ?? [])];
-    expect(fields.map((field) => field.querySelector("span")?.textContent)).toEqual(["Open completed event groups by default"]);
-    const input = fields[0]?.querySelector<HTMLInputElement>("input[type=checkbox]");
-    if (input === null || input === undefined) throw new Error("Missing chat events checkbox");
-    expect(input.checked).toBe(true);
+    expect(fields.map((field) => field.querySelector("span")?.textContent)).toEqual([
+      "Open completed event groups by default",
+      "Open thinking blocks by default",
+    ]);
+    const [groupInput, thinkingInput] = fields.map((field) => field.querySelector<HTMLInputElement>("input[type=checkbox]"));
+    if (groupInput === null || groupInput === undefined || thinkingInput === null || thinkingInput === undefined) throw new Error("Missing chat events checkbox");
+    expect(groupInput.checked).toBe(true);
+    expect(thinkingInput.checked).toBe(false);
 
-    input.click();
+    groupInput.click();
     panel.eventGroupsExpandedByDefault = false;
     await panel.updateComplete;
-    expect(input.checked).toBe(false);
-    expect(toggles).toEqual([false]);
+    expect(groupInput.checked).toBe(false);
+    expect(groupToggles).toEqual([false]);
+
+    thinkingInput.click();
+    panel.thinkingPartsExpandedByDefault = true;
+    await panel.updateComplete;
+    expect(thinkingInput.checked).toBe(true);
+    expect(thinkingToggles).toEqual([true]);
   });
 });
 

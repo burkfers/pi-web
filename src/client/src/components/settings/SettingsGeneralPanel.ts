@@ -47,6 +47,8 @@ export class SettingsGeneralPanel extends LitElement {
   /** Browser-local preference: settled chat event groups open by default. */
   @property({ type: Boolean }) eventGroupsExpandedByDefault = false;
   @property({ attribute: false }) onToggleEventGroupsExpandedByDefault?: (expanded: boolean) => void | Promise<void>;
+  @property({ type: Boolean }) thinkingPartsExpandedByDefault = true;
+  @property({ attribute: false }) onToggleThinkingPartsExpandedByDefault?: (expanded: boolean) => void | Promise<void>;
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("configResponse") && this.configResponse !== undefined) {
@@ -124,6 +126,10 @@ export class SettingsGeneralPanel extends LitElement {
           <label class="toggle-field">
             <input type="checkbox" .checked=${this.eventGroupsExpandedByDefault} @change=${(event: Event) => { const input = event.target; void this.onToggleEventGroupsExpandedByDefault?.(!(input instanceof HTMLInputElement) || input.checked); }}>
             <span>Open completed event groups by default</span>
+          </label>
+          <label class="toggle-field">
+            <input type="checkbox" .checked=${this.thinkingPartsExpandedByDefault} @change=${(event: Event) => { const input = event.target; void this.onToggleThinkingPartsExpandedByDefault?.(!(input instanceof HTMLInputElement) || input.checked); }}>
+            <span>Open thinking blocks by default</span>
           </label>
         </div>
       </section>
