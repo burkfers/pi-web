@@ -22,19 +22,20 @@ describe("ChatDisclosureController", () => {
   it("keeps a default-open live group closed after the user closes it", () => {
     const storage = new MemoryDisclosureStorage();
     const controller = new ChatDisclosureController(storage);
-    const key = "s1:live:12";
+    const key = "s1:e:12";
 
     controller.syncSession("s1");
 
     expect(controller.isOpen(key, true)).toBe(true);
     expect(controller.applyToggle(key, false, true)).toBe(true);
     expect(controller.isOpen(key, true)).toBe(false);
+    expect(controller.isOpen(key, false)).toBe(false);
     expect(storage.read("s1")).toEqual({ open: [], closedDefaultOpen: [key] });
   });
 
   it("allows a closed default-open group to be reopened by the user", () => {
     const controller = new ChatDisclosureController(new MemoryDisclosureStorage());
-    const key = "s1:live:12";
+    const key = "s1:e:12";
 
     controller.syncSession("s1");
     controller.applyToggle(key, false, true);
@@ -44,9 +45,21 @@ describe("ChatDisclosureController", () => {
     expect(controller.snapshot()).toEqual({ open: [], closedDefaultOpen: [] });
   });
 
+  it("falls back to legacy index keys until a group is toggled with its stable key", () => {
+    const storage = new MemoryDisclosureStorage();
+    storage.snapshots.set("s1", { open: [], closedDefaultOpen: ["s1:live:2"] });
+    const controller = new ChatDisclosureController(storage);
+
+    controller.syncSession("s1");
+
+    expect(controller.isOpen("s1:e:new", true, ["s1:live:2"])).toBe(false);
+    controller.applyToggle("s1:e:new", true, true, ["s1:live:2"]);
+    expect(controller.isOpen("s1:e:new", true, ["s1:live:2"])).toBe(true);
+  });
+
   it("persists explicit opens for groups that are closed by default", () => {
     const storage = new MemoryDisclosureStorage();
-    const key = "s1:44";
+    const key = "s1:e:44";
 
     const first = new ChatDisclosureController(storage);
     first.syncSession("s1");
@@ -56,6 +69,40 @@ describe("ChatDisclosureController", () => {
     second.syncSession("s1");
 
     expect(second.isOpen(key, false)).toBe(true);
+  });
+
+  it("carries an explicit state across a default flip", () => {
+    const controller = new ChatDisclosureController(new MemoryDisclosureStorage());
+    const key = "s1:e:12";
+
+    controller.syncSession("s1");
+    controller.applyToggle(key, true, false);
+
+    // The live tail settles into a default-closed group; the explicit open wins.
+    expect(controller.isOpen(key, false)).toBe(true);
+    expect(controller.isOpen(key, true)).toBe(true);
+
+    // Closing again while the default matches retires the record.
+    expect(controller.applyToggle(key, false, false)).toBe(true);
+    expect(controller.snapshot()).toEqual({ open: [], closedDefaultOpen: [] });
+    expect(controller.isOpen(key, false)).toBe(false);
+  });
+
+  it("retires records instead of re-recording when the toggle lands on the default", () => {
+    const controller = new ChatDisclosureController(new MemoryDisclosureStorage());
+    const key = "s1:e:12";
+
+    controller.syncSession("s1");
+
+    // Details fire `toggle` for both directions; a toggle that lands on the
+    // default must not create storage noise.
+    expect(controller.applyToggle(key, true, true)).toBe(false);
+    expect(controller.snapshot()).toEqual({ open: [], closedDefaultOpen: [] });
+
+    controller.applyToggle(key, false, true);
+    expect(controller.applyToggle(key, true, true)).toBe(true);
+    expect(controller.applyToggle(key, false, true)).toBe(true);
+    expect(controller.snapshot()).toEqual({ open: [], closedDefaultOpen: [key] });
   });
 });
 

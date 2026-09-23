@@ -12,6 +12,7 @@ import {
   chatEventAnchorKey,
   chatGroupAnchorKey,
   chatGroupScrollMarkerId,
+  chatGroupDisclosureKey,
   chatMessageGroupClassName,
   chatMessageGroupLabel,
   chatMessageMetadataLabel,
@@ -284,6 +285,14 @@ describe("chat event-group content seams", () => {
     expect(chatMessageGroupLabel(true)).toBe("live events");
     expect(chatMessageGroupLabel(false)).toBe("events");
   });
+
+  it("keeps one key per group across its whole lifecycle", () => {
+    // Continuity contract: same group identity live (start index, no settled
+    // end) and settled — the key must not change at the transition, or the
+    // recorded open state is orphaned and the group collapses.
+    expect(chatGroupDisclosureKey("session-1", 40, "entry-a")).toBe("session-1:e:entry-a");
+    expect(chatGroupDisclosureKey("session-1", 41, "entry-a")).toBe("session-1:e:entry-a");
+  });
 });
 
 describe("ChatView event-group disclosure wiring", () => {
@@ -312,6 +321,33 @@ describe("ChatView event-group disclosure wiring", () => {
     expect(bodyCalls).toEqual([{ messages, startIndex: 40 }]);
   });
 
+  it("keeps a user-closed live group collapsed after settling", () => {
+    const view = new ChatView();
+    view.sessionId = "session-1";
+    const bodyCalls = observeGroupBodyRenders(view);
+    const live = renderMessageGroup(view, messages, 40, 41, true);
+    bodyCalls.length = 0;
+
+    dispatchDetailsToggle(templateEventHandlerAfterMarker(live, "@toggle="), false);
+    renderMessageGroup(view, messages, 40, 41, false);
+
+    expect(bodyCalls).toEqual([]);
+  });
+
+  it("keeps a user-opened settled group open across re-renders while the live tail moves on", () => {
+    const view = new ChatView();
+    view.sessionId = "session-1";
+    const bodyCalls = observeGroupBodyRenders(view);
+    const settled = renderMessageGroup(view, messages, 40, 41, false);
+
+    dispatchDetailsToggle(templateEventHandlerAfterMarker(settled, "@toggle="), true);
+    // The live tail has moved on; the expanded-by-default option is off, so the
+    // group's open must come from the recorded explicit toggle.
+    renderMessageGroup(view, messages, 40, 41, false);
+
+    expect(bodyCalls).toEqual([{ messages, startIndex: 40 }]);
+  });
+
   // Escape hatch: this case verifies the native `<details>` `@toggle` wiring,
   // whose observable effect is that a re-render renders (or defers) the group
   // body. No DOM environment is available for a real disclosure interaction, so
@@ -336,13 +372,27 @@ describe("ChatView event-group disclosure wiring", () => {
   });
 });
 
+describe("chatGroupDisclosureKey", () => {
+  it("keys on the group's first entry id when one is available", () => {
+    expect(chatGroupDisclosureKey("session-1", 40, "entry-a")).toBe("session-1:e:entry-a");
+  });
+
+  it("falls back to the group start index when no entry id is known", () => {
+    expect(chatGroupDisclosureKey("session-1", 40, undefined)).toBe("session-1:i:40");
+  });
+
+  it("scopes keys per session", () => {
+    expect(chatGroupDisclosureKey("session-2", 40, "entry-a")).not.toBe(chatGroupDisclosureKey("session-1", 40, "entry-a"));
+  });
+});
+
 interface GroupBodyRenderCall {
   messages: ChatLine[];
   startIndex: number;
 }
 
 type RenderQueuedMessages = (this: ChatView) => TemplateResult;
-type RenderMessageGroup = (this: ChatView, messages: ChatLine[], startIndex: number, endIndex: number, defaultOpen: boolean) => TemplateResult;
+type RenderMessageGroup = (this: ChatView, messages: ChatLine[], startIndex: number, endIndex: number, live: boolean) => TemplateResult;
 type RenderMessageGroupBody = (this: ChatView, messages: ChatLine[], startIndex: number) => TemplateResult;
 type RenderWarnings = (this: ChatView) => TemplateResult | null;
 type RenderNotificationTray = (this: ChatView) => TemplateResult | null;
@@ -355,10 +405,10 @@ function renderQueuedMessages(view: ChatView): TemplateResult {
   return method.call(view);
 }
 
-function renderMessageGroup(view: ChatView, messages: ChatLine[], startIndex: number, endIndex: number, defaultOpen: boolean): TemplateResult {
+function renderMessageGroup(view: ChatView, messages: ChatLine[], startIndex: number, endIndex: number, live: boolean): TemplateResult {
   const method: unknown = Reflect.get(view, "renderMessageGroup");
   if (!isRenderMessageGroup(method)) throw new Error("ChatView.renderMessageGroup is not callable");
-  return method.call(view, messages, startIndex, endIndex, defaultOpen);
+  return method.call(view, messages, startIndex, endIndex, live);
 }
 
 function renderWarnings(view: ChatView): TemplateResult | null {

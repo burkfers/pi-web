@@ -35,7 +35,7 @@ const browserChatDisclosureStorage: ChatDisclosureStorage = {
 export class ChatDisclosureController {
   private sessionId = "";
   private openGroupKeys = new Set<string>();
-  private closedDefaultOpenGroupKeys = new Set<string>();
+  private closedDefaultOpenKeys = new Set<string>();
 
   constructor(private readonly storage: ChatDisclosureStorage = browserChatDisclosureStorage) {}
 
@@ -44,34 +44,46 @@ export class ChatDisclosureController {
     this.sessionId = sessionId;
     const snapshot = sessionId === "" ? undefined : this.storage.read(sessionId);
     this.openGroupKeys = new Set(snapshot?.open ?? []);
-    this.closedDefaultOpenGroupKeys = new Set(snapshot?.closedDefaultOpen ?? []);
+    this.closedDefaultOpenKeys = new Set(snapshot?.closedDefaultOpen ?? []);
   }
 
-  isOpen(groupKey: string, defaultOpen: boolean): boolean {
-    if (defaultOpen) return !this.closedDefaultOpenGroupKeys.has(groupKey);
-    return this.openGroupKeys.has(groupKey);
+  isOpen(groupKey: string, defaultOpen: boolean, legacyKeys: readonly string[] = []): boolean {
+    // Explicit toggles win over whatever the current default is, so state
+    // carries across default flips (live tail -> settled group, or a change of
+    // the expanded-by-default preference). Legacy keys are consulted only when
+    // the current stable key has no record, preserving pre-migration choices.
+    for (const key of [groupKey, ...legacyKeys]) {
+      if (this.openGroupKeys.has(key)) return true;
+      if (this.closedDefaultOpenKeys.has(key)) return false;
+    }
+    return defaultOpen;
   }
 
-  applyToggle(groupKey: string, open: boolean, defaultOpen: boolean): boolean {
-    const wasOpen = this.isOpen(groupKey, defaultOpen);
-    const nextOpenKeys = new Set(this.openGroupKeys);
-    const nextClosedDefaultOpenKeys = new Set(this.closedDefaultOpenGroupKeys);
+  applyToggle(groupKey: string, open: boolean, defaultOpen: boolean, legacyKeys: readonly string[] = []): boolean {
+    const wasOpen = this.isOpen(groupKey, defaultOpen, legacyKeys);
 
-    if (defaultOpen) {
-      nextOpenKeys.delete(groupKey);
-      if (open) nextClosedDefaultOpenKeys.delete(groupKey);
-      else nextClosedDefaultOpenKeys.add(groupKey);
+    if (open === defaultOpen) {
+      // The user accepted the current default; recorded state (if any) is
+      // retired so the group follows defaults again hereafter.
+      const hadOpen = this.openGroupKeys.delete(groupKey);
+      const hadClosed = this.closedDefaultOpenKeys.delete(groupKey);
+      const hadLegacy = legacyKeys.some((key) => this.openGroupKeys.delete(key) || this.closedDefaultOpenKeys.delete(key));
+      if (!hadOpen && !hadClosed && !hadLegacy) return false;
     } else {
-      nextClosedDefaultOpenKeys.delete(groupKey);
-      if (open) nextOpenKeys.add(groupKey);
-      else nextOpenKeys.delete(groupKey);
+      for (const key of legacyKeys) {
+        this.openGroupKeys.delete(key);
+        this.closedDefaultOpenKeys.delete(key);
+      }
+      if (open === wasOpen) return false;
+      if (open) {
+        this.closedDefaultOpenKeys.delete(groupKey);
+        this.openGroupKeys.add(groupKey);
+      } else {
+        this.openGroupKeys.delete(groupKey);
+        this.closedDefaultOpenKeys.add(groupKey);
+      }
     }
 
-    const nextOpen = defaultOpen ? !nextClosedDefaultOpenKeys.has(groupKey) : nextOpenKeys.has(groupKey);
-    if (nextOpen === wasOpen && setsEqual(nextOpenKeys, this.openGroupKeys) && setsEqual(nextClosedDefaultOpenKeys, this.closedDefaultOpenGroupKeys)) return false;
-
-    this.openGroupKeys = nextOpenKeys;
-    this.closedDefaultOpenGroupKeys = nextClosedDefaultOpenKeys;
     this.persist();
     return true;
   }
@@ -79,7 +91,7 @@ export class ChatDisclosureController {
   snapshot(): ChatDisclosureSnapshot {
     return {
       open: [...this.openGroupKeys],
-      closedDefaultOpen: [...this.closedDefaultOpenGroupKeys],
+      closedDefaultOpen: [...this.closedDefaultOpenKeys],
     };
   }
 
@@ -106,14 +118,6 @@ export function parseDisclosureSnapshot(value: unknown): ChatDisclosureSnapshot 
 
 function stringItems(items: unknown[]): string[] {
   return items.filter((item): item is string => typeof item === "string");
-}
-
-function setsEqual(left: Set<string>, right: Set<string>): boolean {
-  if (left.size !== right.size) return false;
-  for (const item of left) {
-    if (!right.has(item)) return false;
-  }
-  return true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

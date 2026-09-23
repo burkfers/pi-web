@@ -124,14 +124,25 @@ export function chatGroupScrollMarkerId(endIndex: number): string {
   return `g:${String(endIndex)}`;
 }
 
+/**
+ * The disclosure key for an event group, stable across the live -> settled
+ * transition so recorded open state is not orphaned there. Prefer the group's
+ * first entry id: raw indices can shift when compaction rewrites history.
+ * Groups only grow at the tail and never merge, so either identity is stable
+ * for the group's lifetime.
+ */
+export function chatGroupDisclosureKey(sessionId: string, startIndex: number, firstEntryId: string | undefined): string {
+  return firstEntryId === undefined ? `${sessionId}:i:${String(startIndex)}` : `${sessionId}:e:${firstEntryId}`;
+}
+
 /** The CSS class list for an event-group `<details>`, distinguishing the live tail. */
-export function chatMessageGroupClassName(defaultOpen: boolean): string {
-  return defaultOpen ? "msg event-group live" : "msg event-group";
+export function chatMessageGroupClassName(live: boolean): string {
+  return live ? "msg event-group live" : "msg event-group";
 }
 
 /** The disclosure summary label for an event group, distinguishing the live tail. */
-export function chatMessageGroupLabel(defaultOpen: boolean): string {
-  return defaultOpen ? "live events" : "events";
+export function chatMessageGroupLabel(live: boolean): string {
+  return live ? "live events" : "events";
 }
 
 /** Whether a queued-message section shows the server clear-queue action. */
@@ -864,14 +875,16 @@ export class ChatView extends LitElement {
     return message.parts.length > 0 && message.parts.every((part) => part.type === "askUserRecord");
   }
 
-  private renderMessageGroup(messages: ChatLine[], startIndex: number, endIndex: number, defaultOpen: boolean) {
-    const disclosureKey = this.groupDisclosureKey(startIndex, endIndex, defaultOpen);
-    const open = this.disclosures.isOpen(disclosureKey, defaultOpen);
+  private renderMessageGroup(messages: ChatLine[], startIndex: number, endIndex: number, live: boolean) {
+    const disclosureKey = this.groupDisclosureKey(startIndex, messages);
+    const defaultOpen = live;
+    const legacyKeys = [`${this.sessionId}:live:${String(startIndex)}`, `${this.sessionId}:${String(endIndex)}`];
+    const open = this.disclosures.isOpen(disclosureKey, defaultOpen, legacyKeys);
     return html`
       ${this.renderScrollMarker(this.groupScrollMarkerId(endIndex))}
-      <details class=${chatMessageGroupClassName(defaultOpen)} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(startIndex)} ?open=${open} @toggle=${(event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen); }}>
+      <details class=${chatMessageGroupClassName(live)} data-index=${startIndex} data-scroll-anchor-id=${this.groupAnchorKey(startIndex)} ?open=${open} @toggle=${(event: Event) => { this.onGroupToggle(disclosureKey, event, defaultOpen, legacyKeys); }}>
         <summary>
-          <b class="label">${chatMessageGroupLabel(defaultOpen)}</b>
+          <b class="label">${chatMessageGroupLabel(live)}</b></b>
           <span>${summarizeChatGroup(messages)}</span>
         </summary>
         ${open ? this.renderMessageGroupBody(messages, startIndex) : null}
@@ -1030,10 +1043,10 @@ export class ChatView extends LitElement {
     return null;
   }
 
-  private onGroupToggle(key: string, event: Event, defaultOpen: boolean) {
+  private onGroupToggle(key: string, event: Event, defaultOpen: boolean, legacyKeys: readonly string[] = []) {
     const details = event.currentTarget;
     if (!(details instanceof HTMLDetailsElement)) return;
-    if (this.disclosures.applyToggle(key, details.open, defaultOpen)) this.requestUpdate();
+    if (this.disclosures.applyToggle(key, details.open, defaultOpen, legacyKeys)) this.requestUpdate();
   }
 
   private onScroll() {
@@ -1373,8 +1386,8 @@ export class ChatView extends LitElement {
     });
   }
 
-  private groupDisclosureKey(startIndex: number, endIndex: number, defaultOpen: boolean): string {
-    return defaultOpen ? `${this.sessionId}:live:${String(startIndex)}` : `${this.sessionId}:${String(endIndex)}`;
+  private groupDisclosureKey(startIndex: number, messages: ChatLine[]): string {
+    return chatGroupDisclosureKey(this.sessionId, startIndex, messages.find((message) => message.entryId !== undefined)?.entryId);
   }
 
   private messageAnchorKey(index: number): string {
