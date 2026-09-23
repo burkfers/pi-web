@@ -1,11 +1,43 @@
-import { marked } from "marked";
+import hljs from "highlight.js/lib/common";
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import powershell from "highlight.js/lib/languages/powershell";
+import { marked, type Tokens } from "marked";
 import { replaceLocalMarkdownImages } from "./markdownImages";
 import { workspaceFilePreviewUrl } from "../api/urls";
 import { resolveAppUrl } from "../appUrl";
 import { workspaceMarkdownFilePath, type MarkdownWorkspaceContext } from "./workspaceLinks";
 
+// "lib/common" covers ~36 popular languages (python, typescript, json, …) and
+// TOML aliases the registered "ini" grammar. Three in-demand grammars ship in
+// the package but not in common, so they are registered here explicitly.
+hljs.registerLanguage("dockerfile", dockerfile);
+hljs.registerLanguage("powershell", powershell);
+
 const renderer = new marked.Renderer();
 renderer.html = ({ text }) => escapeHtml(text);
+renderer.code = ({ text, lang }: Tokens.Code): string => {
+  const language = lang?.trim().split(/\s/u)[0]?.toLowerCase() ?? "";
+  const highlighted = language === "" ? undefined : highlightCode(text, language);
+  const classAttribute = lang === undefined || lang === "" ? "" : ` class="language-${escapeHtml(language)}"`;
+  const body = highlighted ?? escapeHtml(text);
+  return `<pre><code${classAttribute}>${body}\n</code></pre>\n`;
+};
+
+// highlight.js tokens are styled via --pi-* variables in shared.ts, so colors
+// follow the active theme contribution; no library stylesheet is imported.
+const MAX_HIGHLIGHTED_CODE_LENGTH = 50_000;
+
+function highlightCode(code: string, language: string): string | undefined {
+  // getLanguage resolves aliases too ("toml" aliases the ini grammar); listLanguages() does not.
+  if (hljs.getLanguage(language) === undefined || code.length > MAX_HIGHLIGHTED_CODE_LENGTH) return undefined;
+  try {
+    return hljs.highlight(code, { language }).value;
+  } catch {
+    // highlight.js throws for pathologically nested grammars; plain code beats
+    // a failed chat render.
+    return undefined;
+  }
+}
 
 const MAX_MARKDOWN_CACHE_ENTRIES = 300;
 const markdownHtmlCache = new Map<string, string>();

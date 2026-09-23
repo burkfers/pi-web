@@ -129,3 +129,48 @@ describe("workspace Markdown downloads", () => {
     expect(markdownWorkspaceContext("remote", selected, { id: "s", cwd: "/srv/work" })).toEqual({ machineId: "remote", projectId: "p", workspaceId: "w", root: "/srv/work/" });
   });
 });
+
+describe("fenced code highlighting", () => {
+  it("highlights supported languages into hljs token spans", () => {
+    const code = render("```python\ndef run(count: int) -> str:\n    return \"done\"\n```\n");
+    const element = code.querySelector("pre code");
+    expect(element?.classList.contains("language-python")).toBe(true);
+    expect(element?.querySelector(".hljs-keyword")?.textContent).toBe("def");
+    expect(element?.querySelector(".hljs-string")?.textContent).toBe('"done"');
+  });
+
+  it.each(["toml", "dockerfile", "powershell"])("highlights added languages beyond common: %s", (language) => {
+    // TOML is an alias of the ini grammar shipped with common; sections come
+    // out as "hljs-section", dockerfile and powershell as keyword/built_in.
+    const sample = language === "toml" ? "[section]"
+      : language === "dockerfile" ? "FROM node:22"
+      : "Get-ChildItem";
+    const element = render("```" + language + "\n" + sample + "```\n").querySelector("pre code");
+    expect(element?.classList.contains(`language-${language}`)).toBe(true);
+    expect(element?.querySelectorAll(".hljs-section, .hljs-keyword, .hljs-built_in").length).toBeGreaterThan(0);
+  });
+
+  it("keeps unknown and missing languages as plain escaped code", () => {
+    const unknown = render("```zig\nlet x = 1 < 2 && 3 > 2;\n```\n");
+    expect(unknown.querySelector("pre code")?.classList.contains("language-zig")).toBe(true);
+    expect(unknown.querySelector("pre code")?.querySelector("span")).toBeNull();
+    expect(unknown.querySelector("pre code")?.textContent).toContain("&&");
+    const plain = render("```\nplain text\n```\n");
+    expect(plain.querySelector("pre code")).not.toBeNull();
+    expect(plain.querySelector("pre code")?.className).toBe("");
+  });
+
+  it("uses the first fence info word as the language", () => {
+    // "python title=\"example.py\"" must not match a language named "python title".
+    const element = render("```python title=\"example.py\"\nx = 1\n```\n").querySelector("pre code");
+    expect(element?.classList.contains("language-python")).toBe(true);
+    expect(element?.querySelector(".hljs-number")?.textContent).toBe("1");
+  });
+
+  it("skips highlighting for oversized blocks without changing escaping", () => {
+    const body = "y = " + "x".repeat(60_000);
+    const element = render("```python\n" + body + "\n```\n").querySelector("pre code");
+    expect(element?.classList.contains("language-python")).toBe(true);
+    expect(element?.querySelector("span")).toBeNull();
+  });
+});

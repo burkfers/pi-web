@@ -476,6 +476,18 @@ export const formattedTextStyles = css`
   .code-block-wrapper pre { margin: 0; padding-right: 40px; }
   pre { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); padding: 10px; overflow-x: auto; overflow-y: hidden; direction: ltr; text-align: left; unicode-bidi: isolate; }
   pre code { border: 0; padding: 0; background: transparent; }
+  /* highlight.js token classes mapped to theme tokens so colors follow the */
+  /* active theme contribution; any class without a rule stays plain text. */
+  .hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-meta .hljs-keyword, .hljs-template-tag, .hljs-name { color: var(--pi-accent); }
+  .hljs-string, .hljs-regexp, .hljs-symbol, .hljs-addition, .hljs-meta .hljs-string { color: var(--pi-success); }
+  .hljs-number, .hljs-literal, .hljs-operator, .hljs-selector-attr, .hljs-selector-pseudo { color: var(--pi-purple); }
+  .hljs-comment, .hljs-quote, .hljs-deletion { color: var(--pi-text-secondary); font-style: italic; }
+  .hljs-title, .hljs-title.function_, .hljs-section, .hljs-selector-id { color: var(--pi-text-bright); }
+  .hljs-built_in, .hljs-type, .hljs-builtin-name, .hljs-class .hljs-title, .hljs-attr, .hljs-attribute, .hljs-variable.language_ { color: var(--pi-warning); }
+  .hljs-variable, .hljs-template-variable, .hljs-params { color: var(--pi-text); }
+  .hljs-meta, .hljs-tag { color: var(--pi-muted); }
+  .hljs-emphasis { font-style: italic; }
+  .hljs-strong { font-weight: 600; }
   .code-copy-button { position: absolute; top: 6px; right: 6px; z-index: 1; display: inline-grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-muted); padding: 0; font: 14px system-ui, sans-serif; line-height: 1; cursor: pointer; }
   .code-copy-button:hover, .code-copy-button:focus { color: var(--pi-text); border-color: var(--pi-accent); }
   blockquote { border-left: 3px solid var(--pi-border); padding-left: 10px; color: var(--pi-muted); }
