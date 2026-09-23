@@ -1,10 +1,11 @@
-import { LitElement, css, html } from "lit";
+import { LitElement, css, html, type TemplateResult } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import type { Machine, Project, SessionInfo, Workspace } from "../../api";
 import { browserGatewayDisplayUrl, machineIconUrl } from "../../instanceIdentity";
 import { shortSessionId } from "../../sessionLabels";
 import { renderNavigationMenuIcon } from "../tabIcons";
 import type { NavigationSection } from "../../appShell/navigationState";
+import { isNavigationSectionHidden } from "../../appShell/navigationState";
 
 @customElement("app-context-bar")
 export class AppContextBar extends LitElement {
@@ -20,6 +21,8 @@ export class AppContextBar extends LitElement {
   @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onShowNavigation?: () => void;
   @property({ type: Boolean }) hiddenActiveDestination = false;
+  /** Sections the sidebar does not render; their chips are informational only. */
+  @property({ attribute: false }) hiddenSections: readonly NavigationSection[] = [];
   @query(".context-items") private contextItems?: HTMLElement | null;
   @state() private canScrollLeft = false;
   @state() private canScrollRight = false;
@@ -59,7 +62,7 @@ export class AppContextBar extends LitElement {
         <ol class="context-items" @scroll=${this.onContextScroll}>
           ${showMachineChip ? html`
             <li class="context-item">
-              ${machineChoice ? html`
+              ${machineChoice && !this.isSectionHidden("machines") ? html`
                 <button type="button" class=${machineChipClass} title=${machineContextTitle(machine)} aria-label=${`Machine: ${machineContextLabel(machine)}. Open machine selection.`} @click=${() => { this.onOpenSection?.("machines"); }}>
                   ${this.renderMachineChipContent(machine, this.locationIndicator)}
                 </button>
@@ -72,27 +75,35 @@ export class AppContextBar extends LitElement {
             </li>
           ` : null}
           <li class="context-item">
-            <button type="button" class=${this.project === undefined ? "context-chip empty" : "context-chip"} title=${projectContextTitle(this.project)} aria-label=${`Project: ${projectLabel}. Open project selection.`} @click=${() => { this.onOpenSection?.("projects"); }}>
-              <span class="context-kind">Project</span>
-              <span class="context-value">${projectLabel}</span>
-            </button>
+            ${this.renderSectionChip("projects", this.project === undefined, projectContextTitle(this.project), `Project: ${projectLabel}. Open project selection.`, "Project", projectLabel)}
           </li>
           <li class="context-item">
-            <button type="button" class=${this.workspace === undefined ? "context-chip empty" : "context-chip"} title=${workspaceContextTitle(this.workspace)} aria-label=${`Workspace: ${workspaceLabel}. Open workspace selection.`} @click=${() => { this.onOpenSection?.("workspaces"); }}>
-              <span class="context-kind">Workspace</span>
-              <span class="context-value">${workspaceLabel}</span>
-            </button>
+            ${this.renderSectionChip("workspaces", this.workspace === undefined, workspaceContextTitle(this.workspace), `Workspace: ${workspaceLabel}. Open workspace selection.`, "Workspace", workspaceLabel)}
           </li>
           <li class="context-item">
-            <button type="button" class=${this.session === undefined ? "context-chip empty" : "context-chip"} title=${sessionContextTitle(this.session)} aria-label=${`Session: ${sessionLabel}. Open session selection.`} @click=${() => { this.onOpenSection?.("sessions"); }}>
-              <span class="context-kind">Session</span>
-              <span class="context-value">${sessionLabel}</span>
-            </button>
+            ${this.renderSectionChip("sessions", this.session === undefined, sessionContextTitle(this.session), `Session: ${sessionLabel}. Open session selection.`, "Session", sessionLabel)}
           </li>
         </ol>
         ${this.hasContextActions() ? html`<div class="context-actions">${this.onShowNavigation === undefined ? null : html`<button type="button" class=${`context-action-button${this.hiddenActiveDestination ? " selected" : ""}`} title="Navigation" aria-label="Navigation" aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`}${this.renderActionsButton()}${this.refreshControl}</div>` : null}
       </nav>
     `;
+  }
+
+  /**
+   * A chip whose section is hidden has no selection surface to open, so it
+   * degrades to the static value display like the single-machine chip.
+   */
+  private renderSectionChip(section: NavigationSection, empty: boolean, title: string, ariaLabel: string, kind: string, value: string): TemplateResult {
+    const chipClass = empty ? "context-chip empty" : "context-chip";
+    const content = html`<span class="context-kind">${kind}</span><span class="context-value">${value}</span>`;
+    if (this.isSectionHidden(section) || this.onOpenSection === undefined) {
+      return html`<span class=${`${chipClass} static`} title=${title}>${content}</span>`;
+    }
+    return html`<button type="button" class=${chipClass} title=${title} aria-label=${ariaLabel} @click=${() => { this.onOpenSection?.(section); }}>${content}</button>`;
+  }
+
+  private isSectionHidden(section: NavigationSection): boolean {
+    return isNavigationSectionHidden(section, this.hiddenSections);
   }
 
   private renderMachineChipContent(machine: Machine | undefined, locationIndicator: boolean) {

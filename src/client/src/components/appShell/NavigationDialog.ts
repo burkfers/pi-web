@@ -11,7 +11,7 @@ export class NavigationDialog extends LitElement {
   @property({ attribute: false }) tabs: AppMobileMainTab[] = [];
   // Layout/search visibility must not narrow implicit-all pin edits.
   @property({ attribute: false }) pinUniverse?: readonly string[];
-  @property({ attribute: false }) preferences: NavigationPreferences = { pinnedIds: [], mobileCollapsed: false };
+  @property({ attribute: false }) preferences: NavigationPreferences = { pinnedIds: [], mobileCollapsed: false, hiddenSections: [] };
   @property({ attribute: false }) selectedTab?: AppMobileMainTab["id"];
   @property({ attribute: false }) onSelect?: (id: AppMobileMainTab["id"]) => void;
   @property({ attribute: false }) onPreferencesChange?: (preferences: NavigationPreferences) => void;

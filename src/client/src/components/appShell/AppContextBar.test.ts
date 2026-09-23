@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import type { Machine } from "../../api";
+import type { NavigationSection } from "../../appShell/navigationState";
 import { AppContextBar, machineContextDetail } from "./AppContextBar";
 
 afterEach(() => {
@@ -80,11 +81,40 @@ describe("machine crumb", () => {
   });
 });
 
+describe("hidden sections", () => {
+  it("renders a chip's section value as static text when its section is hidden", async () => {
+    const opened: string[] = [];
+    const bar = await mountBar({
+      machines: [machine("local"), machine("remote-a")],
+      hiddenSections: ["workspaces"],
+      onOpenSection: (section) => { opened.push(section); },
+    });
+
+    const chips = [...(bar.shadowRoot?.querySelectorAll<HTMLElement>(".context-chip") ?? [])].filter((chip) => !chip.classList.contains("machine-chip"));
+    const workspaceChip = chips[1];
+    if (workspaceChip === undefined) throw new Error("Missing workspace chip");
+    expect(workspaceChip.tagName).toBe("SPAN");
+    expect(workspaceChip.textContent).toContain("No workspace");
+    workspaceChip.click();
+    expect(opened).toEqual([]);
+  });
+
+  it("keeps chips interactive for visible sections", async () => {
+    const opened: string[] = [];
+    const bar = await mountBar({ machines: [machine("local")], hiddenSections: ["machines"], onOpenSection: (section) => { opened.push(section); } });
+
+    const chips = [...(bar.shadowRoot?.querySelectorAll<HTMLElement>(".context-chip") ?? [])].filter((chip) => !chip.classList.contains("machine-chip"));
+    for (const chip of chips) chip.click();
+    expect(opened).toEqual(["projects", "workspaces", "sessions"]);
+  });
+});
+
 interface BarFixture {
   machines: Machine[];
   machine?: Machine;
   locationIndicator?: boolean;
-  onOpenSection?: (section: "machines" | "projects" | "workspaces" | "sessions") => void;
+  hiddenSections?: NavigationSection[];
+  onOpenSection?: (section: NavigationSection) => void;
 }
 
 async function mountBar(fixture: BarFixture): Promise<AppContextBar> {
@@ -92,6 +122,7 @@ async function mountBar(fixture: BarFixture): Promise<AppContextBar> {
   bar.machines = fixture.machines;
   if (fixture.machine !== undefined) bar.machine = fixture.machine;
   bar.locationIndicator = fixture.locationIndicator ?? false;
+  if (fixture.hiddenSections !== undefined) bar.hiddenSections = fixture.hiddenSections;
   if (fixture.onOpenSection !== undefined) bar.onOpenSection = fixture.onOpenSection;
   document.body.append(bar);
   await bar.updateComplete;

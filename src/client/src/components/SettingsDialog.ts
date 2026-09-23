@@ -2,6 +2,7 @@ import { css, html, LitElement, type PropertyValues, type TemplateResult } from 
 import { customElement, property, state } from "lit/decorators.js";
 import type { AppAction } from "../actions";
 import { configApi, piPackagesApi, pluginsApi, type Machine, type MachineRuntime, type PiPackageMutationResponse, type PiPackageScope, type PiPackagesResponse, type PiWebConfigResponse, type PiWebConfigValues, type PiWebPluginsResponse } from "../api";
+import type { NavigationSection } from "../appShell/navigationState";
 import type { SettingsSection } from "../settingsRoute";
 import "./ModalSurface";
 import "./settings/SettingsGeneralPanel";
@@ -22,10 +23,12 @@ export class SettingsDialog extends LitElement {
   @property({ attribute: false }) actions: AppAction[] = [];
   @property({ attribute: false }) machine: Machine | undefined;
   @property({ attribute: false }) machineRuntime: MachineRuntime | undefined;
+  @property({ attribute: false }) hiddenNavigationSections: readonly NavigationSection[] = [];
   @property({ attribute: false }) onNavigate?: (section: SettingsSection) => void;
   @property({ attribute: false }) onClose?: () => void;
   @property({ attribute: false }) onConfigSaved?: (config: PiWebConfigValues) => void;
   @property({ attribute: false }) onRefreshMachineRuntime?: (machineId: string) => void | Promise<void>;
+  @property({ attribute: false }) onToggleNavigationSection?: (section: NavigationSection, hidden: boolean) => void | Promise<void>;
   @state() private configResponse: PiWebConfigResponse | undefined;
   @state() private accessConfigResponse: PiWebConfigResponse | undefined;
   @state() private sessiondConfigResponse: PiWebConfigResponse | undefined;
@@ -198,6 +201,8 @@ export class SettingsDialog extends LitElement {
         .onReloadMachine=${() => this.loadAccessConfigForTarget()}
         .onSave=${(config: PiWebConfigValues) => this.saveConfig(config)}
         .onSaveMachineConfig=${(config: PiWebConfigValues) => this.saveMachineAccessConfig(config)}
+        .hiddenNavigationSections=${this.hiddenNavigationSections}
+        .onToggleNavigationSection=${(section: NavigationSection, hidden: boolean) => this.onToggleNavigationSection?.(section, hidden)}
       ></settings-general-panel>
     `;
   }

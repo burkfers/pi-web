@@ -1,6 +1,10 @@
+import { sanitizeHiddenNavigationSections, type NavigationSection } from "./appShell/navigationState";
+
 export interface NavigationPreferences {
   pinnedIds: string[];
   mobileCollapsed: boolean;
+  /** Sidebar sections this browser hides; always sanitized to keep one visible. */
+  hiddenSections: NavigationSection[];
 }
 
 const storageKey = "pi-web:navigation-preferences";
@@ -21,12 +25,13 @@ export function loadNavigationPreferences(storage: Pick<Storage, "getItem"> | un
       return {
         pinnedIds: Array.isArray(pins) ? [...new Set(pins.filter((id): id is string => typeof id === "string" && id.length > 0))] : [],
         mobileCollapsed: "mobileCollapsed" in value && value.mobileCollapsed === true,
+        hiddenSections: sanitizeHiddenNavigationSections("hiddenSections" in value ? value.hiddenSections : undefined),
       };
     }
   } catch {
     // Layout preferences are optional when storage is blocked or malformed.
   }
-  return { pinnedIds: [], mobileCollapsed: false };
+  return { pinnedIds: [], mobileCollapsed: false, hiddenSections: [] };
 }
 
 export function saveNavigationPreferences(preferences: NavigationPreferences, storage: Pick<Storage, "setItem"> | undefined = browserStorage()): void {
@@ -36,6 +41,33 @@ export function saveNavigationPreferences(preferences: NavigationPreferences, st
     // Ignore quota/privacy errors for this optional browser layout preference.
   }
 }
+
+/**
+ * The stored preference after hiding/showing one section. A hide that would
+ * leave no visible section is refused: the caller keeps the previous
+ * preferences (and the Settings toggle stays disabled for that case).
+ */
+export function withHiddenNavigationSection(
+  preferences: NavigationPreferences,
+  section: NavigationSection,
+  hidden: boolean,
+): NavigationPreferences {
+  const isHidden = preferences.hiddenSections.includes(section);
+  if (hidden === isHidden) return preferences;
+  const hiddenSections = hidden
+    ? sanitizeHiddenNavigationSections([...preferences.hiddenSections, section])
+    : preferences.hiddenSections.filter((candidate) => candidate !== section);
+  if (hidden && !hiddenSections.includes(section)) return preferences;
+  return { ...preferences, hiddenSections };
+}
+
+/** Section labels for user-facing settings text. */
+export const NAVIGATION_SECTION_LABELS: Record<NavigationSection, string> = {
+  machines: "Machines",
+  projects: "Projects",
+  workspaces: "Workspaces",
+  sessions: "Sessions",
+};
 
 export function isNavigationPinned(id: string, pinnedIds: readonly string[]): boolean {
   return pinnedIds.length === 0 || pinnedIds.includes(id);

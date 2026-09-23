@@ -134,7 +134,7 @@ describe("application rendering boundaries", () => {
     { mobile: false, desktop: false, view: "navigation", pins: ["chat"], selected: false },
     { mobile: false, desktop: true, view: "chat", pins: ["navigation"], selected: false },
   ] as const)("highlights only available hidden mobile destinations: %j", async ({ mobile, desktop, view, pins, selected }) => {
-    saveNavigationPreferences({ pinnedIds: [...pins], mobileCollapsed: false });
+    saveNavigationPreferences({ pinnedIds: [...pins], mobileCollapsed: false, hiddenSections: [] });
     const app = await mountApp({ mainView: view });
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
@@ -152,7 +152,7 @@ describe("application rendering boundaries", () => {
     { desktop: false, collapsed: false },
     { desktop: false, collapsed: true },
   ])("does not select or highlight a fallback for unavailable destinations: %j", async ({ desktop, collapsed }) => {
-    saveNavigationPreferences({ pinnedIds: ["chat"], mobileCollapsed: collapsed });
+    saveNavigationPreferences({ pinnedIds: ["chat"], mobileCollapsed: collapsed, hiddenSections: [] });
     const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "workspace", workspaceTool: "render-test:panel" }, () => html`<p>Remembered content</p>`);
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
@@ -182,7 +182,7 @@ describe("application rendering boundaries", () => {
   });
 
   it.each(["chat", "workspace"] as const)("collapsed mobile navigation selects the visible destination, not the remembered tool: %s", async (mainView) => {
-    saveNavigationPreferences({ pinnedIds: ["chat"], mobileCollapsed: true });
+    saveNavigationPreferences({ pinnedIds: ["chat"], mobileCollapsed: true, hiddenSections: [] });
     const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView, workspaceTool: "render-test:panel" }, () => html`<p>Tool content</p>`);
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
@@ -278,7 +278,7 @@ describe("application rendering boundaries", () => {
   });
 
   it("collapses only the mobile tab bar, keeping breadcrumbs and separate Navigation and Actions controls", async () => {
-    saveNavigationPreferences({ pinnedIds: [], mobileCollapsed: true });
+    saveNavigationPreferences({ pinnedIds: [], mobileCollapsed: true, hiddenSections: [] });
     const app = await mountApp({});
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
@@ -312,7 +312,7 @@ describe("application rendering boundaries", () => {
     await settle(app);
     const reopenedDialog = app.shadowRoot?.querySelector("navigation-dialog");
     expect(reopenedDialog).not.toBeNull();
-    expect(loadNavigationPreferences()).toEqual({ pinnedIds: [], mobileCollapsed: false });
+    expect(loadNavigationPreferences()).toEqual({ pinnedIds: [], mobileCollapsed: false, hiddenSections: [] });
 
     // A resize must invalidate the guarded tab surface even with collapse enabled.
     reopenedDialog?.shadowRoot?.querySelector<HTMLButtonElement>(".mobile-navigation button:last-child")?.click();

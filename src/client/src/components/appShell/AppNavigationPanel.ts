@@ -5,7 +5,7 @@ import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
 import type { WorkspaceLabelItem } from "../../plugins/types";
 import { selectedMachineId } from "../../controllers/types";
 import type { NavigationSection } from "../../appShell/navigationState";
-import { NAVIGATION_SECTION_ORDER } from "../../appShell/navigationState";
+import { NAVIGATION_SECTION_ORDER, isNavigationSectionHidden } from "../../appShell/navigationState";
 import type { KeyboardNavigableSection } from "../navigationFocus";
 import "../MachineList";
 import "../MachineSwitcher";
@@ -44,6 +44,8 @@ export class AppNavigationPanel extends LitElement {
   @property({ type: Boolean }) projectsCollapsed = false;
   @property({ type: Boolean }) workspacesCollapsed = false;
   @property({ type: Boolean }) sessionsCollapsed = false;
+  /** Sections the sidebar does not render; skipped in markup so focus order stays sound. */
+  @property({ attribute: false }) hiddenSections: readonly NavigationSection[] = [];
   @property({ type: Number }) startingSessionCount = 0;
   @property({ type: Boolean }) canStartSession = false;
   @property({ attribute: false }) onShowActions?: () => void;
@@ -83,6 +85,8 @@ export class AppNavigationPanel extends LitElement {
 
   async focusSection(section: NavigationSection): Promise<boolean> {
     await this.updateComplete;
+    // A hidden section renders nothing focusable.
+    if (isNavigationSectionHidden(section, this.hiddenSections)) return false;
     switch (section) {
       case "machines": return await this.focusNavigableSection(this.compact ? this.machineList : this.machineSwitcher);
       case "projects": return await this.focusNavigableSection(this.projectList);
@@ -128,23 +132,25 @@ export class AppNavigationPanel extends LitElement {
     return html`
       <header>
         <strong>PI WEB</strong>
-        <machine-switcher
-          .machines=${this.machines}
-          .selected=${this.selectedMachine}
-          .locationIndicator=${this.locationIndicator}
-          .statuses=${this.machineStatuses}
-          .statusSnapshots=${this.machineStatusSnapshots}
-          .onSelect=${(machine: Machine) => this.onSelectMachine?.(machine)}
-          .onRemove=${(machine: Machine) => this.onRemoveMachine?.(machine)}
-          .onFocusNextSection=${() => { this.focusNextFrom("machines"); }}
-          .onCancelKeyboardNavigation=${() => { this.cancelKeyboardNavigation(); }}
-        ></machine-switcher>
+        ${isNavigationSectionHidden("machines", this.hiddenSections) ? null : html`
+          <machine-switcher
+            .machines=${this.machines}
+            .selected=${this.selectedMachine}
+            .locationIndicator=${this.locationIndicator}
+            .statuses=${this.machineStatuses}
+            .statusSnapshots=${this.machineStatusSnapshots}
+            .onSelect=${(machine: Machine) => this.onSelectMachine?.(machine)}
+            .onRemove=${(machine: Machine) => this.onRemoveMachine?.(machine)}
+            .onFocusNextSection=${() => { this.focusNextFrom("machines"); }}
+            .onCancelKeyboardNavigation=${() => { this.cancelKeyboardNavigation(); }}
+          ></machine-switcher>
+        `}
         <div class="header-actions">
           ${this.refreshControl}
           <button title="Show Actions" aria-label="Show Actions" @click=${() => { this.onShowActions?.(); }}>Actions</button>
         </div>
       </header>
-      ${this.compact && shouldShowMachinesSection(this.machines) ? html`
+      ${this.compact && shouldShowMachinesSection(this.machines) && !isNavigationSectionHidden("machines", this.hiddenSections) ? html`
         <machine-list
           .machines=${this.machines}
           .selected=${this.selectedMachine}
@@ -159,6 +165,7 @@ export class AppNavigationPanel extends LitElement {
           .onCancelKeyboardNavigation=${() => { this.cancelKeyboardNavigation(); }}
         ></machine-list>
       ` : null}
+      ${isNavigationSectionHidden("projects", this.hiddenSections) ? null : html`
       <project-list
         .projects=${this.projects}
         .selected=${this.selectedProject}
@@ -172,6 +179,8 @@ export class AppNavigationPanel extends LitElement {
         .onFocusNextSection=${this.childCallbacks.nextFromProjects}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></project-list>
+      `}
+      ${isNavigationSectionHidden("workspaces", this.hiddenSections) ? null : html`
       <workspace-list
         .workspaces=${this.workspaces}
         .selected=${this.selectedWorkspace}
@@ -188,6 +197,8 @@ export class AppNavigationPanel extends LitElement {
         .onFocusNextSection=${this.childCallbacks.nextFromWorkspaces}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></workspace-list>
+      `}
+      ${isNavigationSectionHidden("sessions", this.hiddenSections) ? null : html`
       <session-list
         .sessions=${this.sessions}
         .statuses=${this.sessionStatuses}
@@ -219,6 +230,7 @@ export class AppNavigationPanel extends LitElement {
         .onFocusNextSection=${this.childCallbacks.nextFromSessions}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></session-list>
+      `}
     `;
   }
 
@@ -239,12 +251,12 @@ export class AppNavigationPanel extends LitElement {
   }
 
   private focusPreviousFrom(section: NavigationSection): void {
-    const target = previousVisibleNavigationTarget(section, this.machines);
+    const target = previousVisibleNavigationTarget(section, this.machines, this.hiddenSections);
     if (target !== undefined) void this.onFocusNavigationTarget?.(target);
   }
 
   private focusNextFrom(section: NavigationSection): void {
-    void this.onFocusNavigationTarget?.(nextVisibleNavigationTarget(section, this.machines));
+    void this.onFocusNavigationTarget?.(nextVisibleNavigationTarget(section, this.machines, this.hiddenSections));
   }
 
   private cancelKeyboardNavigation(): void {
@@ -275,18 +287,20 @@ export function shouldShowMachinesSection(machines: readonly Machine[]): boolean
   return machines.length > 1;
 }
 
-function previousVisibleNavigationTarget(section: NavigationSection, machines: readonly Machine[]): NavigationSection | undefined {
-  const sections = visibleNavigationSections(machines);
+function previousVisibleNavigationTarget(section: NavigationSection, machines: readonly Machine[], hiddenSections: readonly NavigationSection[]): NavigationSection | undefined {
+  const sections = visibleNavigationSections(machines, hiddenSections);
   return sections[sections.indexOf(section) - 1];
 }
 
-function nextVisibleNavigationTarget(section: NavigationSection, machines: readonly Machine[]): NavigationFocusTarget {
-  const sections = visibleNavigationSections(machines);
+function nextVisibleNavigationTarget(section: NavigationSection, machines: readonly Machine[], hiddenSections: readonly NavigationSection[]): NavigationFocusTarget {
+  const sections = visibleNavigationSections(machines, hiddenSections);
   return sections[sections.indexOf(section) + 1] ?? "chat";
 }
 
 // Only a machine choice makes the machines section navigable: with a single
 // machine the switcher is a static bubble, and compact mode has no list.
-function visibleNavigationSections(machines: readonly Machine[]): NavigationSection[] {
-  return NAVIGATION_SECTION_ORDER.filter((section) => section !== "machines" || shouldShowMachinesSection(machines));
+// Hidden sections are excluded so keyboard section navigation skips them.
+function visibleNavigationSections(machines: readonly Machine[], hiddenSections: readonly NavigationSection[]): NavigationSection[] {
+  return NAVIGATION_SECTION_ORDER.filter((section) => !isNavigationSectionHidden(section, hiddenSections)
+    && (section !== "machines" || shouldShowMachinesSection(machines)));
 }

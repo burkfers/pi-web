@@ -1,5 +1,8 @@
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import type { NavigationSection } from "../../appShell/navigationState";
+import { NAVIGATION_SECTION_ORDER } from "../../appShell/navigationState";
+import { NAVIGATION_SECTION_LABELS } from "../../navigationPreferences";
 import { DEFAULT_WORKSPACE_ATTACHMENTS_FOLDER, DEFAULT_WORKSPACE_UPLOADS_FOLDER, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues } from "../../api";
 import "./SettingsPanelFrame";
 import type { SettingsNotice } from "./SettingsPanelFrame";
@@ -33,6 +36,9 @@ export class SettingsGeneralPanel extends LitElement {
   @property({ attribute: false }) onReloadMachine?: () => void | Promise<void>;
   @property({ attribute: false }) onSave?: (config: PiWebConfigValues) => void | Promise<void>;
   @property({ attribute: false }) onSaveMachineConfig?: (config: PiWebConfigValues) => void | Promise<void>;
+  /** Sidebar sections this browser hides; changing one applies immediately, no save button. */
+  @property({ attribute: false }) hiddenNavigationSections: readonly NavigationSection[] = [];
+  @property({ attribute: false }) onToggleNavigationSection?: (section: NavigationSection, hidden: boolean) => void | Promise<void>;
   @state() private gatewayDraft: GatewayServerConfigDraft = emptyGatewayServerConfigDraft();
   @state() private machineDraft: MachineAccessConfigDraft = emptyMachineAccessConfigDraft();
   @state() private gatewayLocalError = "";
@@ -60,11 +66,44 @@ export class SettingsGeneralPanel extends LitElement {
         .onAction=${() => { this.reloadAll(); }}
       >
         <div class="settings-sections">
+          ${this.renderSidebarSettings()}
           ${this.renderGatewayServerSettings()}
           ${this.renderSelectedMachineAccessSettings()}
         </div>
       </settings-panel-frame>
     `;
+  }
+
+  /**
+   * Browser-local appearance: unlike the config forms below, these toggles are
+   * stored per browser and apply immediately.
+   */
+  private renderSidebarSettings(): TemplateResult {
+    const hidden = this.hiddenNavigationSections;
+    const visibleCount = NAVIGATION_SECTION_ORDER.length - hidden.length;
+    return html`
+      <section class="settings-card" aria-label="Sidebar settings">
+        <div class="card-heading">
+          <h3>Sidebar</h3>
+          <p>Choose the sections shown in the left navigation. These are stored in this browser only and apply immediately. At least one section stays visible.</p>
+        </div>
+        <div class="toggle-list">
+          ${NAVIGATION_SECTION_ORDER.map((section) => {
+            const visible = !hidden.includes(section);
+            return html`
+              <label class="toggle-field">
+                <input type="checkbox" .checked=${visible} ?disabled=${visibleCount <= 1 && visible} @change=${(event: Event) => { const input = event.target; this.toggleNavigationSection(section, !(input instanceof HTMLInputElement) || !input.checked); }}>
+                <span>Show ${NAVIGATION_SECTION_LABELS[section]} in sidebar</span>
+              </label>
+            `;
+          })}
+        </div>
+      </section>
+    `;
+  }
+
+  private toggleNavigationSection(section: NavigationSection, hidden: boolean): void {
+    void this.onToggleNavigationSection?.(section, hidden);
   }
 
   private renderGatewayServerSettings(): TemplateResult {
@@ -267,6 +306,11 @@ export class SettingsGeneralPanel extends LitElement {
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
     button:disabled { opacity: .55; cursor: not-allowed; }
     .settings-sections { display: grid; gap: 14px; }
+    .toggle-list { display: grid; gap: 8px; }
+    .toggle-field { display: flex; align-items: center; gap: 9px; }
+    .toggle-field input[type="checkbox"] { box-sizing: border-box; width: 16px; height: 16px; margin: 0; padding: 0; accent-color: var(--pi-accent); }
+    .toggle-field span { color: var(--pi-text); }
+    .toggle-field input:disabled + span { color: var(--pi-muted); }
     .settings-card, .message, .loading-card, .config-path-card, .effective-card { border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
     .settings-card { display: grid; gap: 14px; }
     .message { margin-bottom: 12px; }

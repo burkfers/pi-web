@@ -155,6 +155,51 @@ describe("stable list inputs", () => {
   });
 });
 
+describe("hidden sections", () => {
+  it("skips hidden machine controls as well as list sections", async () => {
+    const panel = await mountPanel({}, machine("local"));
+    panel.hiddenSections = ["machines"];
+    await panel.updateComplete;
+    const root = panel.shadowRoot;
+    if (root === null) throw new Error("Missing panel shadow root");
+    expect(root.querySelector("machine-switcher")).toBeNull();
+    expect(root.querySelector("machine-list")).toBeNull();
+  });
+
+  it("skips hidden sections in rendering and keeps selection working", async () => {
+    const selectedSessions: SessionInfo[] = [];
+    const panel = await mountPanel({}, machine("local"));
+    panel.hiddenSections = ["workspaces"];
+    panel.sessions = [session("session-1")];
+    panel.onSelectSession = (session) => { selectedSessions.push(session); };
+    await panel.updateComplete;
+
+    const panelRoot = panel.shadowRoot;
+    if (panelRoot === null) throw new Error("Missing panel shadow root");
+    expect(panelRoot.querySelector("workspace-list")).toBeNull();
+    expect(panelRoot.querySelector("project-list")).toBeInstanceOf(ProjectList);
+    expect(section(panel, "session-list", SessionList)).toBeInstanceOf(SessionList);
+
+    // Focus order skips the hidden section entirely.
+    panel.onFocusNavigationTarget = (target) => { focusedTargets.push(target); };
+    section(panel, "project-list", ProjectList).shadowRoot
+      ?.querySelectorAll<HTMLButtonElement>(".action-row")[0]
+      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(focusedTargets).toEqual(["sessions"]);
+
+    // Focus requests for hidden sections resolve to nothing focusable.
+    await expect(panel.focusSection("workspaces")).resolves.toBe(false);
+    await expect(panel.focusSection("sessions")).resolves.toBe(true);
+
+    const sessionRow = panelRoot.querySelectorAll<HTMLElement>("session-list")[0]
+      ?.shadowRoot?.querySelector<HTMLElement>(".action-row");
+    sessionRow?.click();
+    expect(selectedSessions).toEqual([session("session-1")]);
+  });
+});
+
+const focusedTargets: (string | undefined)[] = [];
+
 function control(list: ProjectList | WorkspaceList | SessionList, selector: string): HTMLElement {
   const element = list.shadowRoot?.querySelector(selector);
   if (!(element instanceof HTMLElement)) throw new Error(`Missing ${selector}`);

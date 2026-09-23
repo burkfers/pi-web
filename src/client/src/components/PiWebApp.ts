@@ -51,7 +51,8 @@ import { PanelResizeController, type PanelResizeConstraints, type ResizablePanel
 import { isCreatingSessionId, parseMainView, readRoute, resolveAppRoute, routeMatchesWorkspaceIdentity, writeRoute, type AppRoute, type ParsedAppRoute, type WorkspaceRouteIdentity } from "../route";
 import { readSettingsSection, writeSettingsSection, type SettingsSection } from "../settingsRoute";
 import { applyActiveShortcutPreferences } from "../shortcutPreferences";
-import { loadNavigationPreferences, saveNavigationPreferences, pinnedNavigationTabs, type NavigationPreferences } from "../navigationPreferences";
+import { loadNavigationPreferences, saveNavigationPreferences, pinnedNavigationTabs, withHiddenNavigationSection, type NavigationPreferences } from "../navigationPreferences";
+import { resolveVisibleNavigationSection } from "../appShell/navigationState";
 import "./appShell/NavigationDialog";
 import { canDeleteWorkspace, isWorkspaceDeletionPending, isWorkspaceDeletionRunPending, latestWorkspaceDeletionRuns, pendingWorkspaceDeletionIds, targetWorkspaceIdForRun, workspaceDeletionRunFilter, workspaceRemovalConfirmation } from "../workspaceDeletion";
 import "./MachineList";
@@ -264,6 +265,7 @@ export class PiWebApp extends LitElement {
     this,
     () => this.state,
     () => this.appShell.isMobileNavigationLayout,
+    () => this.navigationPreferences.hiddenSections,
   );
   private readonly systemLightThemeMedia = typeof window !== "undefined" && "matchMedia" in window ? window.matchMedia("(prefers-color-scheme: light)") : undefined;
   private piWebStatusTimer: number | undefined;
@@ -1829,6 +1831,7 @@ export class PiWebApp extends LitElement {
     }
     return html`
       <app-navigation-panel
+        .hiddenSections=${this.navigationPreferences.hiddenSections}
         .machines=${this.state.machines}
         .selectedMachine=${this.state.selectedMachine}
         .locationIndicator=${this.appShell.isPwaDisplayMode}
@@ -1892,6 +1895,8 @@ export class PiWebApp extends LitElement {
   }
 
   private async selectNavigationItem(section: NavigationSection, nextTarget: NavigationFocusTarget, action: () => Promise<boolean | undefined>): Promise<void> {
+    const hiddenSections = this.navigationPreferences.hiddenSections;
+    const target = nextTarget === "chat" ? "chat" : resolveVisibleNavigationSection(nextTarget, hiddenSections) ?? "chat";
     const seq = ++this.navigationSelectionSeq;
     const isCurrentSelection = () => seq === this.navigationSelectionSeq;
     let navigationAccepted: boolean | undefined;
@@ -1902,7 +1907,7 @@ export class PiWebApp extends LitElement {
     }, isCurrentSelection);
 
     if (!isCurrentSelection() || navigationAccepted === false) return;
-    await this.focusNavigationTarget(nextTarget, isCurrentSelection);
+    await this.focusNavigationTarget(target, isCurrentSelection);
   }
 
   private async startSessionFromNavigation(): Promise<void> {
@@ -1944,6 +1949,19 @@ export class PiWebApp extends LitElement {
     const navigationSeq = this.navigationSelectionSeq;
     const isCurrent = () => navigationSeq === this.navigationSelectionSeq && shouldComplete();
     if (!isCurrent()) return;
+    // A hidden section has no focusable rows: move to the next section that
+    // still renders, and to the chat composer when none follows. The machines
+    // guard below keeps its existing rule: the single-machine bubble is not a
+    // control, so a machine request lands on the projects list.
+    const resolved = resolveVisibleNavigationSection(section, this.navigationPreferences.hiddenSections);
+    if (resolved === undefined) {
+      await this.focusChatComposer(isCurrent);
+      return;
+    }
+    if (resolved !== section) {
+      await this.focusNavigationSection(resolved, isCurrent);
+      return;
+    }
     // The machines section is only focusable when a machine choice exists; the
     // single-machine bubble is not a control.
     if (section === "machines" && !shouldShowMachinesSection(this.state.machines)) {
@@ -3387,6 +3405,10 @@ export class PiWebApp extends LitElement {
     saveNavigationPreferences(preferences);
   };
 
+  private readonly toggleHiddenNavigationSection = (section: NavigationSection, hidden: boolean): void => {
+    this.changeNavigationPreferences(withHiddenNavigationSection(this.navigationPreferences, section, hidden));
+  };
+
   private renderContextBar() {
     if (!this.appShell.isMobileNavigationLayout) return null;
     return html`
@@ -3398,6 +3420,7 @@ export class PiWebApp extends LitElement {
         .workspace=${this.state.selectedWorkspace}
         .session=${this.state.selectedSession}
         .refreshControl=${this.appShell.shouldShowAppRefreshInContextBar() ? this.renderAppRefresh() : undefined}
+        .hiddenSections=${this.navigationPreferences.hiddenSections}
         .onOpenSection=${this.handleOpenNavigationSection}
         .onShowNavigation=${this.navigationPreferences.mobileCollapsed ? this.showNavigation : undefined}
         .hiddenActiveDestination=${this.availableNavigationTabs().some((tab) => tab.id === this.selectedNavigationTab())}
@@ -3539,7 +3562,7 @@ export class PiWebApp extends LitElement {
         ${state.machineDialogOpen ? html`<machine-dialog .error=${state.error} .onSubmit=${(input: MachineDialogSubmit) => this.submitMachineDialog(input)} .onCancel=${() => { this.setState({ machineDialogOpen: false }); }}></machine-dialog>` : null}
         ${this.sessionCleanupDialog !== undefined ? html`<session-cleanup-dialog .preview=${this.sessionCleanupDialog.preview} .previewRequest=${this.sessionCleanupDialog.previewRequest} .result=${this.sessionCleanupDialog.result} .loading=${this.sessionCleanupDialog.loading === true} .running=${this.sessionCleanupDialog.running === true} .error=${this.sessionCleanupDialog.error ?? ""} .onPreview=${(request: SessionCleanupRequest) => { void this.previewSessionCleanup(request); }} .onRun=${(request: SessionCleanupRequest) => { void this.runSessionCleanup(request); }} .onClose=${() => { this.closeSessionCleanupDialog(); }}></session-cleanup-dialog>` : null}
         ${state.themeDialog !== undefined ? html`<command-picker title=${state.themeDialog.title} .options=${state.themeDialog.options} .selectedValue=${state.themeDialog.selectedValue} .onPick=${(value: string) => { this.pickTheme(value); }} .onCancel=${() => { this.setState({ themeDialog: undefined }); }}></command-picker>` : null}
-        ${this.settingsSection !== undefined ? html`<settings-dialog .section=${this.settingsSection} .machine=${state.selectedMachine} .machineRuntime=${this.selectedMachineRuntime()} .actions=${this.getDefaultActions()} .onNavigate=${(section: SettingsSection) => { this.navigateSettings(section); }} .onClose=${() => { this.closeSettings(); }} .onConfigSaved=${(config: PiWebConfigValues) => { this.applyClientConfig(config); }} .onRefreshMachineRuntime=${async (machineId: string) => { await this.machines.refreshMachineRuntime(machineId); }}></settings-dialog>` : null}
+        ${this.settingsSection !== undefined ? html`<settings-dialog .section=${this.settingsSection} .machine=${state.selectedMachine} .machineRuntime=${this.selectedMachineRuntime()} .actions=${this.getDefaultActions()} .onNavigate=${(section: SettingsSection) => { this.navigateSettings(section); }} .onClose=${() => { this.closeSettings(); }} .onConfigSaved=${(config: PiWebConfigValues) => { this.applyClientConfig(config); }} .onRefreshMachineRuntime=${async (machineId: string) => { await this.machines.refreshMachineRuntime(machineId); }} .hiddenNavigationSections=${this.navigationPreferences.hiddenSections} .onToggleNavigationSection=${this.toggleHiddenNavigationSection}></settings-dialog>` : null}
       </div>
     `;
   }
