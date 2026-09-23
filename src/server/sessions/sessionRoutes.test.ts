@@ -956,6 +956,65 @@ describe("session routes", () => {
     }
   });
 
+  it("renames a session through the name route with normalized workspace context", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const eventHub = new SessionEventHub();
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, eventHub);
+
+    try {
+      const requestCwd = resolve("/repo");
+      const response = await routeApp.inject({
+        method: "POST",
+        url: "/sessions/session-1/name",
+        payload: { cwd: `${requestCwd}/./`, name: "Build auth" },
+      });
+      const missingName = await routeApp.inject({ method: "POST", url: "/sessions/session-1/name", payload: { cwd: requestCwd } });
+      const nonStringName = await routeApp.inject({ method: "POST", url: "/sessions/session-1/name", payload: { cwd: requestCwd, name: 7 } });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ renamed: true });
+      expect(routeService.renameCalls).toEqual([{ lookup: { id: "session-1", cwd: requestCwd }, name: "Build auth" }]);
+      expect(missingName.statusCode).toBe(400);
+      expect(missingName.json()).toEqual({ error: "name field must be a string" });
+      expect(nonStringName.statusCode).toBe(400);
+      expect(routeService.renameCalls).toHaveLength(1);
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
+  it("maps rename failures to mutation statuses, including the blank-name usage message", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const eventHub = new SessionEventHub();
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, eventHub);
+    const payload = { cwd: "/repo", name: "" };
+
+    try {
+      // The shared /name logic rejects blank names; the route maps it to a 400.
+      routeService.renameError = new Error("Usage: /name <session name>");
+      const blank = await routeApp.inject({ method: "POST", url: "/sessions/session-1/name", payload });
+      expect(blank.statusCode).toBe(400);
+      expect(blank.json()).toEqual({ error: "Usage: /name <session name>" });
+
+      routeService.renameError = new Error("Session not found");
+      const missing = await routeApp.inject({ method: "POST", url: "/sessions/session-1/name", payload });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json()).toEqual({ error: "Session not found" });
+
+      routeService.renameError = new Error("Archived sessions are read-only. Restore the session to continue.");
+      const archived = await routeApp.inject({ method: "POST", url: "/sessions/session-1/name", payload });
+      expect(archived.statusCode).toBe(400);
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
   it("reloads a session through the reload route, forwarding workspace context", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1248,6 +1307,8 @@ class CapturingRouteSessionService implements SessionRouteService {
   }
   readonly calls: unknown[] = [];
   readonly reloadCalls: SessionRouteRef[] = [];
+  readonly renameCalls: { lookup: SessionRouteRef; name: string }[] = [];
+  renameError: Error | undefined;
   readonly clearQueueCalls: SessionRouteRef[] = [];
   readonly dismissWarningCalls: { lookup: SessionRouteRef; dismissId: string }[] = [];
   readonly notificationInboxCalls: SessionRef[] = [];
@@ -1319,6 +1380,12 @@ class CapturingRouteSessionService implements SessionRouteService {
   deleteArchivedMany(refs: readonly SessionBulkMutationRef[]): Promise<SessionBulkDeleteArchivedResponse> {
     this.bulkDeleteCalls.push([...refs]);
     return Promise.resolve({ deleted: true, deletedSessionIds: refs.map((ref) => ref.id), failures: [], generatedAt: "2026-06-25T00:00:00.000Z" });
+  }
+
+  renameSession(lookup: SessionRouteRef, name: string): Promise<void> {
+    this.renameCalls.push({ lookup, name });
+    if (this.renameError !== undefined) return Promise.reject(this.renameError);
+    return Promise.resolve();
   }
 
   reload(lookup: SessionRouteRef): Promise<void> {

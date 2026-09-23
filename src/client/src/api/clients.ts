@@ -35,6 +35,7 @@ import {
   parsePiWebStatusResponse,
   parseProject,
   parseReloaded,
+  parseRenamed,
   parseRestored,
   parseSavedAttachments,
   parseSessionBulkArchiveResponse,
@@ -283,6 +284,7 @@ export const sessionsApi = {
   archiveWithDescendants: (session: SessionRef, machineId = "local") => request(sessionPath(session, "archive-tree", machineId), parseArchived, { method: "POST", body: sessionBody(session) }),
   restore: (session: SessionRef, machineId = "local") => request(sessionPath(session, "restore", machineId), parseRestored, { method: "POST", body: sessionBody(session) }),
   detachParent: (session: SessionRef, machineId = "local") => request(sessionPath(session, "detach-parent", machineId), parseDetached, { method: "POST", body: sessionBody(session) }),
+  renameSession: (session: SessionRef, name: string, machineId = "local") => request(sessionPath(session, "name", machineId), parseRenamed, { method: "POST", body: sessionBody(session, { name }) }),
   reloadSession: (session: SessionRef, machineId = "local") => request(sessionPath(session, "reload", machineId), parseReloaded, { method: "POST", body: sessionBody(session) }),
   authProviders: (options?: { mode?: "login" | "logout"; authType?: "oauth" | "api_key"; machineId?: string }) => {
     const params = new URLSearchParams();

@@ -306,6 +306,11 @@ type SessionArchiveRepository = Pick<SessionArchiveStore, "list" | "get" | "arch
 
 export type PiSessionRef = SessionRouteRef;
 
+export interface PiSessionActivityEntry {
+  cwd: string;
+  modified: Date;
+}
+
 export interface PiSessionListEntry {
   id: string;
   path: string;
@@ -419,6 +424,8 @@ export interface PiSessionManagerGateway {
    * `resolveSessionFile`.
    */
   listAll(): Promise<PiSessionListEntry[]>;
+  /** List only cwd and mtime for cross-project activity projections. */
+  listActivity?(): Promise<PiSessionActivityEntry[]>;
   open(path: string): PiSessionManager;
 }
 
@@ -2755,6 +2762,16 @@ export class PiSessionService implements SessionRouteService {
     await this.assertWritable(ref);
     const active = await this.getActive(ref);
     return this.commandService.respond(active.runtime.session.sessionId, requestId, value);
+  }
+
+  async renameSession(ref: PiSessionRef, name: string): Promise<void> {
+    await this.assertWritable(ref);
+    const active = await this.getActive(ref);
+    // Close the archive race after the asynchronous open. The final
+    // writability check and synchronous rename run in one continuation, so an
+    // archive that wins the store race is observed before mutation.
+    await this.assertWritable(ref);
+    this.commandService.renameSession(active.runtime.session, name);
   }
 
   async navigateTree(ref: PiSessionRef, request: ClientSessionTreeNavigateRequest): Promise<ClientSessionTreeNavigateResult> {

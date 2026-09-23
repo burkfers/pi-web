@@ -46,6 +46,42 @@ function currentNotify(fake: { session: Pick<PiAgentSession, "extensionRunner"> 
 }
 
 describe("PiSessionService lifecycle, listing, and reload", () => {
+  it("rechecks writability after resolving a session before renaming", async () => {
+    const sessionId = "rename-archive-race";
+    const gateway = sessionGateway([sessionRecord(sessionId, "/workspace")]);
+    const manager = fakeSessionManager("/workspace");
+    let archiveReads = 0;
+    vi.spyOn(gateway, "open").mockImplementation(() => {
+      archiveReads = 2;
+      return manager;
+    });
+    const archiveStore = {
+      ...emptyArchiveStore(),
+      get: vi.fn(() => {
+        archiveReads += 1;
+        return Promise.resolve(archiveReads >= 3
+          ? { sessionId, cwd: "/workspace", archivedAt: new Date().toISOString(), originalPath: manager.getSessionFile() ?? "/workspace/session.jsonl" }
+          : undefined);
+      }),
+    };
+    const fake = fakeRuntime(sessionId);
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      archiveStore,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: gateway,
+      heartbeatIntervalMs: 60_000,
+    });
+
+    try {
+      await expect(service.renameSession(sessionRef(sessionId), "renamed")).rejects.toThrow("Archived sessions are read-only");
+      expect(fake.session.sessionName).toBeUndefined();
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("starts sessions through an injected runtime creator", async () => {
     const hub = new CapturingSessionEventHub();
     const fake = fakeRuntime();

@@ -61,6 +61,9 @@ export interface SessionCommandNaming {
   listSessionNames?: (cwd: string) => Promise<readonly string[]>;
 }
 
+/** Shared by /name and the rename HTTP route so both reject blank names alike. */
+export const SESSION_NAME_USAGE_MESSAGE = "Usage: /name <session name>";
+
 export interface ForkEntryOptions {
   /** Rechecked inside the serialized replacement boundary when supplied by /tree. */
   expectedLeafId: string | null;
@@ -123,6 +126,20 @@ export class SessionCommandService<TSession extends CommandSession = CommandSess
   }
 
   /**
+   * Rename over HTTP: the same validation and `session.name` fan-out as /name,
+   * with failures thrown instead of returned so routes map them to statuses.
+   */
+  async rename(sessionId: string, name: string): Promise<void> {
+    const active = await this.getActive(sessionId);
+    this.renameSession(active.runtime.session, name);
+  }
+
+  /** Rename an already-resolved runtime without introducing another async gap. */
+  renameSession(session: TSession, name: string): void {
+    this.applySessionName(session, name);
+  }
+
+  /**
    * Forks the session from a specific tree entry into a new session file, leaving
    * the original session untouched. Shared by the `/fork` select response and the
    * session-tree fork-from-entry path. User entries fork from "before" so their
@@ -153,10 +170,20 @@ export class SessionCommandService<TSession extends CommandSession = CommandSess
   }
 
   private nameSession(active: CommandActiveSession<TSession>, name: string): ClientCommandResult {
-    if (name === "") return { type: "unsupported", message: "Usage: /name <session name>" };
-    active.runtime.session.setSessionName(name);
-    this.publishSessionName(active.runtime.session);
-    return { type: "done", message: `Session named: ${name}`, session: clientSessionFromRuntime(active.runtime) };
+    try {
+      this.applySessionName(active.runtime.session, name);
+    } catch (error) {
+      return { type: "unsupported", message: commandErrorMessage(error) };
+    }
+    const applied = active.runtime.session.sessionName ?? name;
+    return { type: "done", message: `Session named: ${applied}`, session: clientSessionFromRuntime(active.runtime) };
+  }
+
+  private applySessionName(session: TSession, name: string): void {
+    const trimmed = name.trim();
+    if (trimmed === "") throw new Error(SESSION_NAME_USAGE_MESSAGE);
+    session.setSessionName(trimmed);
+    this.publishSessionName(session);
   }
 
   private compact(session: TSession, instructions: string): ClientCommandResult {
@@ -377,6 +404,10 @@ function treeNavigationActiveUnsupported(): ClientCommandResult {
 
 function promptDraft(text: string | undefined): Partial<Pick<Extract<ClientCommandResult, { type: "done" }>, "promptDraft">> {
   return text === undefined ? {} : { promptDraft: text };
+}
+
+function commandErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function formatSessionStats(session: CommandSession): string {

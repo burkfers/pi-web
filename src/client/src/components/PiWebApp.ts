@@ -1816,6 +1816,7 @@ export class PiWebApp extends LitElement {
     deleteArchivedSessions: (sessions: SessionInfo[]) => this.sessions.deleteArchivedSessions(sessions),
     detachParentSession: (session: SessionInfo) => this.sessions.detachParent(session),
     reloadSession: (session: SessionInfo) => this.sessions.reloadSession(session),
+    renameSession: (session: SessionInfo, name: string) => this.sessions.renameSession(session, name),
     cleanupSessions: () => { this.openSessionCleanupDialog(); },
     focusNavigationTarget: (target: NavigationFocusTarget) => { void this.focusNavigationTarget(target); },
     cancelKeyboardNavigation: () => { void this.focusChatComposer(); },
@@ -1883,6 +1884,7 @@ export class PiWebApp extends LitElement {
         .onDeleteArchivedSessions=${this.navigationActions.deleteArchivedSessions}
         .onDetachParentSession=${this.navigationActions.detachParentSession}
         .onReloadSession=${this.navigationActions.reloadSession}
+        .onRenameSession=${this.navigationActions.renameSession}
         .onCleanupSessions=${this.navigationActions.cleanupSessions}
         .onFocusNavigationTarget=${this.navigationActions.focusNavigationTarget}
         .onCancelKeyboardNavigation=${this.navigationActions.cancelKeyboardNavigation}

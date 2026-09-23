@@ -49,8 +49,13 @@ async function promptAccepted(): Promise<void> {
   await Promise.resolve();
 }
 
-function eventPublisher() {
-  return { publish: vi.fn<(sessionId: string, event: SessionUiEvent) => void>() };
+interface TestEventPublisher {
+  publish: ReturnType<typeof vi.fn<(sessionId: string, event: SessionUiEvent) => void>>;
+  publishGlobal: ReturnType<typeof vi.fn<(event: SessionUiEvent) => void>>;
+}
+
+function eventPublisher(): TestEventPublisher {
+  return { publish: vi.fn(), publishGlobal: vi.fn() };
 }
 
 describe("SessionCommandService", () => {
@@ -83,6 +88,31 @@ describe("SessionCommandService", () => {
     });
     expect(active.runtime.session.setSessionName).toHaveBeenCalledWith("Useful name");
     expect(events.publish).toHaveBeenCalledWith("s1", { type: "session.name", sessionId: "s1", name: "Useful name" });
+  });
+
+  it("rejects blank /name arguments with the usage message", async () => {
+    const active = activeSession();
+    const events = eventPublisher();
+    const service = new SessionCommandService(() => getActive(active), vi.fn(), events);
+
+    await expect(service.run("s1", "/name   ")).resolves.toEqual({ type: "unsupported", message: "Usage: /name <session name>" });
+    expect(active.runtime.session.setSessionName).not.toHaveBeenCalled();
+    expect(events.publish).not.toHaveBeenCalled();
+  });
+
+  it("renames through the HTTP path with identical validation and event fan-out", async () => {
+    const active = activeSession();
+    const events = eventPublisher();
+    const service = new SessionCommandService(() => getActive(active), vi.fn(), { ...events, publishGlobal: events.publishGlobal });
+
+    await expect(service.rename("s1", "  Useful name  ")).resolves.toBeUndefined();
+    expect(active.runtime.session.setSessionName).toHaveBeenCalledWith("Useful name");
+    const event = { type: "session.name", sessionId: "s1", name: "Useful name" } as const;
+    expect(events.publish).toHaveBeenCalledWith("s1", event);
+    expect(events.publishGlobal).toHaveBeenCalledWith(event);
+
+    await expect(service.rename("s1", "   ")).rejects.toThrow("Usage: /name <session name>");
+    expect(active.runtime.session.setSessionName).toHaveBeenCalledTimes(1);
   });
 
   it("formats session stats", async () => {

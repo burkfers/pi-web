@@ -102,5 +102,7 @@ export interface SessionRouteService {
   archiveTree(ref: SessionRouteRef): Promise<ClientArchiveSessionsResponse>;
   restore(ref: SessionRouteRef): Promise<void>;
   reload(ref: SessionRouteRef): Promise<void>;
+  /** Rename through the same /name path so validation and event fan-out match. */
+  renameSession(ref: SessionRouteRef, name: string): Promise<void>;
   detachParent(ref: SessionRouteRef): Promise<void>;
 }

@@ -478,6 +478,18 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     }
   });
 
+  app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown; name?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/name`, async (request, reply) => {
+    try {
+      const body = optionalRecord(request.body);
+      // Blank names are rejected by the same /name logic the service reuses, so
+      // the usage message here matches the chat command's.
+      await sessions.renameSession(sessionRefFromBody(request.params.sessionId, body), requireString(body, "name"));
+      return { renamed: true };
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
   app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/reload`, async (request, reply) => {
     try {
       await sessions.reload(sessionRefFromBody(request.params.sessionId, optionalRecord(request.body)));

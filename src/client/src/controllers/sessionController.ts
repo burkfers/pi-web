@@ -985,6 +985,19 @@ export class SessionController {
     }
   }
 
+  /**
+   * Rename a session through the daemon's /name path. Failures throw so the
+   * caller's inline rename form can surface them; the server's `session.name`
+   * event fans the new name out to every tab either way.
+   */
+  async renameSession(session: SessionInfo, name: string): Promise<void> {
+    const machineId = selectedMachineId(this.getState());
+    await this.api.renameSession(session, name, machineId);
+    // The server's session.name event is the canonical cross-tab update. Do
+    // not reapply the request value after the response: a newer rename may
+    // have arrived while this request was in flight.
+  }
+
   async listModels() {
     const session = this.getState().selectedSession;
     if (!session || session.archived === true) return [];

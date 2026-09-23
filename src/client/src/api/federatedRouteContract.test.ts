@@ -229,6 +229,7 @@ describe("federated route contract", () => {
       ignoreParseFailure(sessionsApi.archive(session, machineId)),
       ignoreParseFailure(sessionsApi.archiveWithDescendants(session, machineId)),
       ignoreParseFailure(sessionsApi.restore(session, machineId)),
+      ignoreParseFailure(sessionsApi.renameSession(session, "New name", machineId)),
       ignoreParseFailure(sessionsApi.reloadSession(session, machineId)),
       ignoreParseFailure(sessionsApi.detachParent(session, machineId)),
       ignoreParseFailure(sessionsApi.authProviders({ mode: "login", authType: "oauth", machineId })),

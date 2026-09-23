@@ -2086,6 +2086,12 @@ export function parseDetached(value: unknown): { detached: true } {
   return { detached: true };
 }
 
+export function parseRenamed(value: unknown): { renamed: true } {
+  const record = requireRecord(value);
+  if (record["renamed"] !== true) throw new Error("Expected renamed response");
+  return { renamed: true };
+}
+
 export function parseReloaded(value: unknown): { reloaded: true } {
   const record = requireRecord(value);
   if (record["reloaded"] !== true) throw new Error("Expected reloaded response");

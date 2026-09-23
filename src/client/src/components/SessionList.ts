@@ -64,9 +64,16 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) onMarkRead?: (session: SessionInfo) => void;
   @property({ attribute: false }) onMarkReadMany?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onReload?: (session: SessionInfo) => void;
+  /** Rename a persisted session; rejects so the inline form can show the error. */
+  @property({ attribute: false }) onRename?: (session: SessionInfo, name: string) => void | Promise<void>;
   @property({ attribute: false }) onCleanup?: () => void;
 
   @state() private openMenuSessionId: string | undefined;
+  @state() private renamingSessionId: string | undefined;
+  @state() private renameDraft = "";
+  @state() private renameSaving = false;
+  @state() private renameError = "";
+  private renameRequestSequence = 0;
   @state() private menuStyle = "";
   @state() private archivedExpanded = false;
   @state() private selectionScopes: ReadonlySet<SessionSelectionScope> = new Set();
@@ -118,6 +125,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   protected override updated(changed: PropertyValues<this>): void {
     if (changed.has("sessions")) {
       if (this.openMenuSessionId !== undefined && !this.sessions.some((session) => session.id === this.openMenuSessionId)) this.openMenuSessionId = undefined;
+      if (this.renamingSessionId !== undefined && !this.sessions.some((session) => session.id === this.renamingSessionId)) this.closeRename();
       if (!this.sessions.some((session) => session.archived === true)) this.archivedExpanded = false;
       this.pruneSelectedSessionIds();
     }
@@ -332,7 +340,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
           <button class="action-menu-toggle" title="Session actions" @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(session.id, event.currentTarget); }}>⋯</button>
           ${this.openMenuSessionId === session.id ? html`
             <div class="action-menu-panel" style=${this.menuStyle}>
-              ${session.archived === true
+              ${this.renamingSessionId === session.id ? this.renderRenameForm(session) : session.archived === true
                 ? html`
                   <button title="Restore session" @click=${() => { this.openMenuSessionId = undefined; this.onRestore?.(session); }}>Restore</button>
                   <button class="danger" title="Permanently delete archived session" @click=${() => { this.openMenuSessionId = undefined; this.confirmDeleteArchived(session); }}>Delete archived session</button>
@@ -342,6 +350,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
                   : html`
                     ${this.unreadSessionIds.has(session.id) ? html`<button title="Mark session as read" @click=${() => { this.openMenuSessionId = undefined; this.onMarkRead?.(session); }}>Mark as read</button>` : null}
                     ${canArchive ? html`
+                      <button title="Rename session" @click=${() => { this.openRename(session); }}>Rename</button>
                       <button title="Archive session" @click=${() => { this.openMenuSessionId = undefined; this.onArchive?.(session); }}>Archive</button>
                       ${descendantCount > 0 ? html`<button title="Archive this session and its descendants" @click=${() => { this.openMenuSessionId = undefined; this.confirmArchiveWithDescendants(session, descendantCount); }}>Archive with descendants (${descendantCount})</button>` : null}
                     ` : null}
@@ -471,13 +480,66 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     if (this.selectionScopes.has("current") && !this.sessions.some((session) => session.archived !== true)) this.closeSelection("current");
   }
 
+  private renderRenameForm(session: SessionInfo) {
+    return html`
+      <form class="rename-form" @click=${(event: MouseEvent) => { event.stopPropagation(); }} @submit=${(event: Event) => { event.preventDefault(); void this.submitRename(session); }}>
+        <input class="rename-input" aria-label="Session name" .value=${this.renameDraft} ?disabled=${this.renameSaving} spellcheck="false" @input=${(event: Event) => { this.renameDraft = event.target instanceof HTMLInputElement ? event.target.value : this.renameDraft; }} @keydown=${(event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); this.closeRename(); } }}></input>
+        ${this.renameError === "" ? null : html`<small class="rename-error" role="alert">${this.renameError}</small>`}
+        <div class="rename-actions">
+          <button class="rename-save" type="submit" ?disabled=${this.renameSaving || this.renameDraft.trim() === ""}>${this.renameSaving ? "Saving…" : "Save"}</button>
+          <button type="button" class="rename-cancel" ?disabled=${this.renameSaving} @click=${() => { this.closeRename(); }}>Cancel</button>
+        </div>
+      </form>
+    `;
+  }
+
   private toggleMenu(sessionId: string, target: EventTarget | null) {
     if (this.openMenuSessionId === sessionId) {
       this.openMenuSessionId = undefined;
+      this.closeRename();
       return;
     }
     this.menuStyle = actionMenuPanelStyle(target, { constrainTo: "viewport" });
     this.openMenuSessionId = sessionId;
+    this.closeRename();
+  }
+
+  private openRename(session: SessionInfo): void {
+    this.renamingSessionId = session.id;
+    this.renameDraft = session.name ?? "";
+    this.renameError = "";
+    // The form renders in this update; select the current name for typing.
+    void this.updateComplete.then(() => {
+      const input = this.renderRoot.querySelector<HTMLInputElement>(".rename-input");
+      input?.focus();
+      input?.select();
+    });
+  }
+
+  private closeRename(): void {
+    this.renameRequestSequence += 1;
+    this.renamingSessionId = undefined;
+    this.renameError = "";
+    this.renameSaving = false;
+  }
+
+  private async submitRename(session: SessionInfo): Promise<void> {
+    const name = this.renameDraft.trim();
+    if (this.renameSaving || name === "") return;
+    const requestSequence = ++this.renameRequestSequence;
+    this.renameSaving = true;
+    this.renameError = "";
+    try {
+      await this.onRename?.(session, name);
+      if (requestSequence !== this.renameRequestSequence) return;
+      this.openMenuSessionId = undefined;
+      this.closeRename();
+    } catch (error) {
+      if (requestSequence !== this.renameRequestSequence) return;
+      this.renameError = error instanceof Error ? error.message : String(error);
+      this.renameSaving = false;
+      this.renderRoot.querySelector<HTMLInputElement>(".rename-input")?.focus();
+    }
   }
 
   private toggleArchived() {
@@ -538,6 +600,13 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .pending-session-row.starting-session .action-main { border-radius: 8px; border-style: dashed; color: var(--pi-muted); }
     .pending-session-row.starting-session .action-name { display: flex; align-items: center; gap: 6px; max-height: none; -webkit-line-clamp: 1; }
     .pending-session-row.starting-session .activity-indicator { flex: 0 0 auto; margin: 0; }
+    .rename-form { display: grid; gap: 6px; padding: 8px; }
+    .rename-input { box-sizing: border-box; width: 100%; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); padding: 8px 9px; font: inherit; }
+    .rename-error { color: var(--pi-danger); white-space: normal; }
+    .rename-actions { display: flex; justify-content: flex-end; gap: 6px; }
+    .rename-actions button { width: auto; padding: 5px 8px; font-size: 12px; }
+    .rename-save { border: 1px solid var(--pi-accent); border-radius: 8px; background: var(--pi-selection-bg); color: var(--pi-text-bright); }
+    .rename-cancel { border: 1px solid var(--pi-border); border-radius: 8px; background: transparent; }
     .action-main.selecting { padding-left: calc(32px + var(--depth, 0) * 16px); }
     .session-checkbox { position: absolute; top: 9px; left: calc(8px + var(--depth, 0) * 16px); z-index: 2; margin: 0; }
   `];

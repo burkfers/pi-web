@@ -160,6 +160,7 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "POST", path: "/sessions/:sessionId/archive" },
   { method: "POST", path: "/sessions/:sessionId/archive-tree" },
   { method: "POST", path: "/sessions/:sessionId/restore" },
+  { method: "POST", path: "/sessions/:sessionId/name" },
   { method: "POST", path: "/sessions/:sessionId/reload" },
   { method: "POST", path: "/sessions/:sessionId/detach-parent" },
   { method: "GET", path: "/auth/providers" },
