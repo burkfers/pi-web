@@ -50,6 +50,30 @@ describe("settings-general-panel sidebar", () => {
   });
 });
 
+describe("settings-general-panel chat", () => {
+  it("reflects the stored expanded-by-default preference and toggles it through the callback", async () => {
+    const toggles: boolean[] = [];
+    const panel = new SettingsGeneralPanel();
+    panel.configResponse = configResponse({ host: "127.0.0.1" });
+    panel.eventGroupsExpandedByDefault = true;
+    panel.onToggleEventGroupsExpandedByDefault = (expanded) => { toggles.push(expanded); };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const fields = [...(panel.shadowRoot?.querySelectorAll<HTMLLabelElement>('section[aria-label="Chat settings"] .toggle-field') ?? [])];
+    expect(fields.map((field) => field.querySelector("span")?.textContent)).toEqual(["Open completed event groups by default"]);
+    const input = fields[0]?.querySelector<HTMLInputElement>("input[type=checkbox]");
+    if (input === null || input === undefined) throw new Error("Missing chat events checkbox");
+    expect(input.checked).toBe(true);
+
+    input.click();
+    panel.eventGroupsExpandedByDefault = false;
+    await panel.updateComplete;
+    expect(input.checked).toBe(false);
+    expect(toggles).toEqual([false]);
+  });
+});
+
 async function mountPanel(
   fixture: { hiddenNavigationSections: NavigationSection[] },
   onToggle?: (section: "machines" | "projects" | "workspaces" | "sessions", hidden: boolean) => void,
@@ -64,7 +88,7 @@ async function mountPanel(
 }
 
 function sidebarToggles(panel: SettingsGeneralPanel): { input: HTMLInputElement; label: string; checked: boolean }[] {
-  const fields = [...(panel.shadowRoot?.querySelectorAll<HTMLLabelElement>(".toggle-field") ?? [])];
+  const fields = [...(panel.shadowRoot?.querySelectorAll<HTMLLabelElement>('section[aria-label="Sidebar settings"] .toggle-field') ?? [])];
   if (fields.length === 0) throw new Error("Missing sidebar visibility fields");
   return fields.map((field) => {
     const input = field.querySelector<HTMLInputElement>("input[type=checkbox]");

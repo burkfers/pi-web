@@ -44,6 +44,10 @@ export class SettingsGeneralPanel extends LitElement {
   @state() private gatewayLocalError = "";
   @state() private machineLocalError = "";
 
+  /** Browser-local preference: settled chat event groups open by default. */
+  @property({ type: Boolean }) eventGroupsExpandedByDefault = false;
+  @property({ attribute: false }) onToggleEventGroupsExpandedByDefault?: (expanded: boolean) => void | Promise<void>;
+
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("configResponse") && this.configResponse !== undefined) {
       this.gatewayDraft = gatewayServerDraftFromConfig(this.configResponse.config);
@@ -66,6 +70,7 @@ export class SettingsGeneralPanel extends LitElement {
         .onAction=${() => { this.reloadAll(); }}
       >
         <div class="settings-sections">
+          ${this.renderChatSettings()}
           ${this.renderSidebarSettings()}
           ${this.renderGatewayServerSettings()}
           ${this.renderSelectedMachineAccessSettings()}
@@ -104,6 +109,25 @@ export class SettingsGeneralPanel extends LitElement {
 
   private toggleNavigationSection(section: NavigationSection, hidden: boolean): void {
     void this.onToggleNavigationSection?.(section, hidden);
+  }
+
+  /** Browser-local chat transcript behavior; applies immediately, no save.
+   */
+  private renderChatSettings(): TemplateResult {
+    return html`
+      <section class="settings-card" aria-label="Chat settings">
+        <div class="card-heading">
+          <h3>Chat events</h3>
+          <p>These are stored in this browser only and apply immediately.</p>
+        </div>
+        <div class="toggle-list">
+          <label class="toggle-field">
+            <input type="checkbox" .checked=${this.eventGroupsExpandedByDefault} @change=${(event: Event) => { const input = event.target; void this.onToggleEventGroupsExpandedByDefault?.(!(input instanceof HTMLInputElement) || input.checked); }}>
+            <span>Open completed event groups by default</span>
+          </label>
+        </div>
+      </section>
+    `;
   }
 
   private renderGatewayServerSettings(): TemplateResult {

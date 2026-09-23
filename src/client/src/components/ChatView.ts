@@ -232,6 +232,8 @@ export class ChatView extends LitElement {
   @property({ type: Boolean }) warningsVisible = true;
   @property({ attribute: false }) onToggleWarnings?: () => void;
   @property({ attribute: false }) onLoadMore?: () => void;
+  /** Whether settled event groups open by default in this browser. */
+  @property({ type: Boolean }) eventGroupsExpandedByDefault = false;
   @query(".chat") private chat?: HTMLDivElement;
   @query("dialog.image-zoom") private imageZoomDialog?: HTMLDialogElement;
   @state() private pinnedToBottom = true;
@@ -877,7 +879,7 @@ export class ChatView extends LitElement {
 
   private renderMessageGroup(messages: ChatLine[], startIndex: number, endIndex: number, live: boolean) {
     const disclosureKey = this.groupDisclosureKey(startIndex, messages);
-    const defaultOpen = live;
+    const defaultOpen = live || this.eventGroupsExpandedByDefault;
     const legacyKeys = [`${this.sessionId}:live:${String(startIndex)}`, `${this.sessionId}:${String(endIndex)}`];
     const open = this.disclosures.isOpen(disclosureKey, defaultOpen, legacyKeys);
     return html`

@@ -321,6 +321,17 @@ describe("ChatView event-group disclosure wiring", () => {
     expect(bodyCalls).toEqual([{ messages, startIndex: 40 }]);
   });
 
+  it("renders a settled group body when expanded-by-default is enabled", () => {
+    const view = new ChatView();
+    view.sessionId = "session-1";
+    view.eventGroupsExpandedByDefault = true;
+    const bodyCalls = observeGroupBodyRenders(view);
+
+    renderMessageGroup(view, messages, 40, 41, false);
+
+    expect(bodyCalls).toEqual([{ messages, startIndex: 40 }]);
+  });
+
   it("keeps a user-closed live group collapsed after settling", () => {
     const view = new ChatView();
     view.sessionId = "session-1";

@@ -24,6 +24,8 @@ export class SettingsDialog extends LitElement {
   @property({ attribute: false }) machine: Machine | undefined;
   @property({ attribute: false }) machineRuntime: MachineRuntime | undefined;
   @property({ attribute: false }) hiddenNavigationSections: readonly NavigationSection[] = [];
+  @property({ type: Boolean }) eventGroupsExpandedByDefault = false;
+  @property({ attribute: false }) onToggleEventGroupsExpandedByDefault?: (expanded: boolean) => void | Promise<void>;
   @property({ attribute: false }) onNavigate?: (section: SettingsSection) => void;
   @property({ attribute: false }) onClose?: () => void;
   @property({ attribute: false }) onConfigSaved?: (config: PiWebConfigValues) => void;
@@ -203,6 +205,8 @@ export class SettingsDialog extends LitElement {
         .onSaveMachineConfig=${(config: PiWebConfigValues) => this.saveMachineAccessConfig(config)}
         .hiddenNavigationSections=${this.hiddenNavigationSections}
         .onToggleNavigationSection=${(section: NavigationSection, hidden: boolean) => this.onToggleNavigationSection?.(section, hidden)}
+        .eventGroupsExpandedByDefault=${this.eventGroupsExpandedByDefault}
+        .onToggleEventGroupsExpandedByDefault=${(expanded: boolean) => this.onToggleEventGroupsExpandedByDefault?.(expanded)}
       ></settings-general-panel>
     `;
   }
