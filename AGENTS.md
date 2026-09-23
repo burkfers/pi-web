@@ -63,34 +63,49 @@ never push them. Upstream updates are `git fetch` + rebase with our commits on t
 - **Checkpoint (container image):** only proven, user-tested states. The image
   is built from this tree, so the tree must be clean (committed) at every
   checkpoint.
-- **Iteration (container overlay):** during development, patch the *installed*
-  PI WEB inside the running container
-  (`/usr/local/lib/node_modules/@jmfederico/pi-web` — it is on the ephemeral
-  overlay). Breaking it is fine: recreating the container from the checkpoint
-  image resets it.
+- **Iteration (dev processes):** run an *isolated* PI WEB instance pair
+  (sessiond + web/API) inside this container on a dev port, from the built
+  checkout. The production session daemon (PID 1) and the production web
+  deployment are never touched or restarted during iteration.
 - **Invariant:** image rebuilds iff the tree is clean and the committed patch
-  is user-verified. The overlay is always uncommitted, un-checkpointed state.
+  is user-verified. Dev processes are throwaway; recreate is always safe.
 
 ### Inner loop (no image rebuild)
 
 1. Edit here. `npm run build` (fast; `node_modules` persists in the workspace
    mount).
 2. Gate on tests: `npm test` (and `npm run lint` for touched code).
-3. Push the fresh build into the running container's installed package:
-   replace its `dist/` wholesale (rsync --delete or clean rm+cp, never a
-   partial overlay of files).
-4. Reload the browser page. Client-only changes need no process restart.
-   Server changes require restarting the just web/API process (never restart
-   the session daemon casually; it owns this session).
+3. Spawn the isolated dev instance pair (sanctioned second-instance pattern:
+   distinct `PI_WEB_DATA_DIR`, `PI_WEB_SESSIOND_SOCKET`, and `PI_WEB_PORT`;
+   do NOT point them at `/data/pi-web` or the production socket):
 
-The actual check runs in the browser against real sessions. `npm pack` is NOT
-run in the inner loop.
+   ```sh
+   D=/data/pi-web-dev
+   setsid nohup env PI_WEB_DATA_DIR=$D \
+     node /usr/local/lib/node_modules/@jmfederico/pi-web/dist/server/sessiond.js \
+     >>/home/node/pi-web-dev-sessiond.log 2>&1 &
+   sleep 4
+   setsid nohup env PI_WEB_HOST=0.0.0.0 PI_WEB_PORT=8599 \
+     PI_WEB_DATA_DIR=$D PI_WEB_SESSIOND_SOCKET=$D/sessiond.sock \
+     node /usr/local/lib/node_modules/@jmfederico/pi-web/dist/server/index.js \
+     >>/home/node/pi-web-dev-web.log 2>&1 &
+   sleep 3
+   curl -s http://127.0.0.1:8599/api/pi-web/health   # expect {"ok":true}
+   ```
+
+4. The user browses via their reverse proxy (container IP + port 8599; the IP
+   changes on container recreate). The dev instance has empty state: add a
+   project (e.g. `/workspace/pi-web`) and start sessions inside it. It reads
+   the same workspaces, so sessions created there are visible elsewhere too;
+   renames propagate live. `npm pack` is NOT run in the inner loop.
+
+The actual check runs in the browser against the isolated instance.
 
 ### Checkpoint
 
 1. Commit the patches in this tree (the tree is exactly what was tested).
-2. User rebuilds the image (`docker compose build` from the container's build
-   directory) and recreates the container.
+2. User rebuilds the image (`docker compose build` on the host) and recreates
+   the containers.
 3. The new image becomes the rollback baseline for the next cycle.
 
 ### Hazards
@@ -101,12 +116,18 @@ run in the inner loop.
   anything under `docker/`; image-build questions go through the user.
 - PWA/service-worker caching can hide a fresh `dist/client`: suspect the
   service worker before suspecting the build (hard reload / SW update).
-- The dist-swap may drift from what `npm pack`/the published layout ships
-  (e.g. the image excludes `dist/**/*.testSupport.*`). Do not add
-  dependencies or `files` changes mid-iteration; they only take effect in the
-  image cycle.
-- After overlay iterations the installed `LOCAL_BUILD` stamp no longer
-  reflects reality; rewrite it on each dist-swap if identifying the running
-  build matters.
-- `pi` (peer dep `@earendil-works/pi-coding-agent`) is linked from the
-  installed package's `node_modules` — overlay dist-swaps must not touch that.
+- Dev processes are unmanaged: `setsid nohup` children survive the spawning
+  shell but die with the container, are not restarted on crash, and are
+  killed by any sessiond restart of this container. Cleanup: `pkill -f
+  'dist/server/(sessiond|index).js'` (matches only the dev pair; the
+  production daemon runs via the `pi-web-sessiond` bin) and wipe the dev data
+  dir (`rm -rf /data/pi-web-dev`) when a fresh sandbox is wanted.
+- Never restart the production session daemon to deploy iteration changes:
+  it owns this session, and a daemon-only restart leaves the production web
+  deployment broken (its required-Terminal-plugin gate goes into
+  "session daemon unavailable" until a coordinated web/API restart + browser
+  reload). Deploy by the checkpoint path instead.
+- The dev stack is ephemeral overlay state; it evaporates on recreate.
+  Long-lived artifacts like logs (under `/home/node`) and the dev data dir
+  (`/data/pi-web-dev`) live on the `/data` mount and must be cleaned up
+  explicitly.
