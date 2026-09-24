@@ -59,6 +59,8 @@ export interface AppState {
   availableThinkingLevels: readonly string[];
   sessionStatuses: Record<string, SessionStatus>;
   sessionActivities: Record<string, SessionActivity>;
+  /** Most recent known session activity per project id; seeds browser-local recency ordering. */
+  projectActivityAt: Record<string, string>;
   /** Authoritative projection plus browser-local optimistic overlays for the selected inbox. */
   selectedNotificationInbox: SelectedSessionNotificationInbox | undefined;
   workspacesByProjectId: Record<string, Workspace[]>;
@@ -154,6 +156,7 @@ export function initialAppState(): AppState {
     availableThinkingLevels: [],
     sessionStatuses: {},
     sessionActivities: {},
+    projectActivityAt: {},
     selectedNotificationInbox: undefined,
     workspacesByProjectId: {},
     workspaceDeletionRuns: {},

@@ -359,6 +359,11 @@ export interface Project {
   createdAt: string;
 }
 
+/** Most recent known session activity per project, keyed by project id. Projects with no known session activity are absent. */
+export interface ProjectActivitySnapshot {
+  projects: Readonly<Record<string, { lastActivityAt: string }>>;
+}
+
 export interface WorkspaceEffectiveConfig {
   readonly uploads?: Readonly<PiWebUploadsConfig>;
   readonly attachments?: Readonly<PiWebAttachmentsConfig>;

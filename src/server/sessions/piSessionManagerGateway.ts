@@ -10,7 +10,7 @@ import { readSessionHeaderSummary, type SessionHeaderReader } from "./sessionFil
 import { tryParseEntry } from "./sessionFileFormat.js";
 import { SessionSummaryScanner } from "./sessionSummaryScanner.js";
 import { TranscriptBranchCache, type TranscriptBranchSnapshot } from "./transcriptBranchCache.js";
-import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway, ResolvedSessionFile } from "./piSessionService.js";
+import type { PiSessionActivityEntry, PiSessionListEntry, PiSessionManager, PiSessionManagerGateway, ResolvedSessionFile } from "./piSessionService.js";
 
 type SessionDirSource = "env" | "settings" | "pi-default";
 
@@ -180,6 +180,15 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
     return uniqueSessionsByPath([...defaultSessions, ...envSessions]);
   }
 
+  async listActivity(): Promise<PiSessionActivityEntry[]> {
+    const envSessionDir = this.resolver.globalEnvSessionDir();
+    const [defaultActivity, envActivity] = await Promise.all([
+      listSessionActivityInDefaultPiStore(this.resolver.defaultSessionsRoot()),
+      envSessionDir === undefined ? Promise.resolve([]) : listSessionActivityInDir(envSessionDir),
+    ]);
+    return [...defaultActivity, ...envActivity];
+  }
+
   open(path: string): PiSessionManager {
     return SessionManager.open(path, dirname(path));
   }
@@ -308,6 +317,33 @@ export async function listSessionsInDefaultPiStore(storeRoot: string): Promise<P
   const sessionDirs = entries.filter((entry) => entry.isDirectory()).map((entry) => join(storeRoot, entry.name));
   const sessions = (await Promise.all(sessionDirs.map((dir) => listSessionsInDir(dir)))).flat();
   return sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+}
+
+async function listSessionActivityInDefaultPiStore(storeRoot: string): Promise<PiSessionActivityEntry[]> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(storeRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const sessionDirs = entries.filter((entry) => entry.isDirectory()).map((entry) => join(storeRoot, entry.name));
+  return (await Promise.all(sessionDirs.map((dir) => listSessionActivityInDir(dir)))).flat();
+}
+
+async function listSessionActivityInDir(sessionDir: string): Promise<PiSessionActivityEntry[]> {
+  let names: string[];
+  try {
+    names = await readdir(sessionDir);
+  } catch {
+    return [];
+  }
+  const entries = await Promise.all(names.filter((name) => name.endsWith(".jsonl")).map(async (name) => {
+    const path = join(sessionDir, name);
+    const [header, stats] = await Promise.all([readSessionHeaderSummary(path), stat(path).catch(() => undefined)]);
+    if (header?.cwd === undefined || stats === undefined) return undefined;
+    return { cwd: canonicalizeStoredCwd(header.cwd), modified: stats.mtime };
+  }));
+  return entries.filter((entry): entry is PiSessionActivityEntry => entry !== undefined);
 }
 
 export function filterSessionsForCwd(sessions: readonly PiSessionListEntry[], cwd: string): PiSessionListEntry[] {

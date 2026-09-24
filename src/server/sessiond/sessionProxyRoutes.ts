@@ -46,6 +46,7 @@ export function registerSessionProxyRoutes(app: FastifyInstance, daemon: Session
 
   app.post(`${prefix}/projects`, (request, reply) => proxy(request, reply));
   app.delete(`${prefix}/projects/:projectId`, (request, reply) => proxy(request, reply));
+  app.get(`${prefix}/projects/activity`, (request, reply) => proxy(request, reply));
 
   app.all(`${prefix}/status`, (request, reply) => proxy(request, reply));
   app.all(`${prefix}/notices`, (request, reply) => proxy(request, reply));

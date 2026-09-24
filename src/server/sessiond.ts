@@ -25,6 +25,8 @@ import { ProjectScopedSpawnTargetResolver } from "./sessions/spawnTargetResolver
 import { ProjectService } from "./projects/projectService.js";
 import { ProjectLifecycleService } from "./projects/projectLifecycleService.js";
 import { registerProjectMutationRoutes } from "./sessiond/projectMutationRoutes.js";
+import { ProjectActivityService } from "./sessiond/projectActivityService.js";
+import { registerProjectActivityRoutes } from "./sessiond/projectActivityRoutes.js";
 import { ProjectStore, projectStorePath } from "./storage/projectStore.js";
 import {
   eligibleWorkspaceProviderContributions,
@@ -282,16 +284,22 @@ async function createSessionDaemonRuntime() {
     projectLifecycleForFailedConstruction = projectLifecycle;
     const projectWorkspaceDeps = { projects, workspaces: workspaceProviders };
     const spawnTargets = config.spawnSessions ? new ProjectScopedSpawnTargetResolver(projectWorkspaceDeps) : undefined;
+    const sessionManagerGateway = createPiSessionManagerGateway({
+      agentDir: activeAgentProfile.dir,
+      env: daemonEnvironment,
+    });
+    const sessionArchiveStore = new SessionArchiveStore(defaultSessionArchiveFilePath(daemonEnvironment));
     const sessions = new PiSessionService(eventHub, sessionServiceDependencies({
       modelRuntime: auth.runtime,
       agentDir: activeAgentProfile.dir,
-      archiveStore: new SessionArchiveStore(defaultSessionArchiveFilePath(daemonEnvironment)),
+      archiveStore: sessionArchiveStore,
       workspaceActivity,
       logger: app.log,
       ...(spawnTargets === undefined ? {} : { spawnTargets }),
       subsessionsEnabled: config.subsessions,
       askUserEnabled: config.askUser,
       config: configService,
+      sessionManager: sessionManagerGateway,
       appendSystemPromptSections: [
         // Sessions always run nested in this daemon, so they always get the
         // session environment facts; Docker deployments add their container
@@ -316,10 +324,6 @@ async function createSessionDaemonRuntime() {
         if (hasNewCompletion) projectLifecycle.scheduleCleanup();
       },
       catalogRefreshStatus: catalogRefresher,
-      sessionManager: createPiSessionManagerGateway({
-        agentDir: activeAgentProfile.dir,
-        env: daemonEnvironment,
-      }),
     }));
     sessionsForFailedConstruction = sessions;
     auth.subscribe((change) => { sessions.applyAuthChange(change); });
@@ -395,7 +399,13 @@ async function createSessionDaemonRuntime() {
       await stateOwnership.release();
     };
     projectLifecycle.scheduleCleanup(); // One delayed pass for existing persisted unread, if any.
-    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
+    const projectActivity = new ProjectActivityService({
+      sessions: sessionManagerGateway,
+      archiveStore: sessionArchiveStore,
+      attribution: statusAttribution,
+      workspaceActivity,
+    });
+    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
   } catch (error) {
     await projectLifecycleForFailedConstruction?.closeAll();
     try {
@@ -412,8 +422,9 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
   registerProjectMutationRoutes(app, projectLifecycle);
+  registerProjectActivityRoutes(app, projectActivity);
   registerMachineStatusRoutes(app, machineStatus);
   registerServerNoticeRoutes(app, serverNotices);
   registerAuthRoutes(app, auth);

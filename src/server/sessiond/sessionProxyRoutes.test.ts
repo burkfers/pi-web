@@ -38,6 +38,17 @@ describe.each(["/api", "/api/machines/local"])("project mutation proxy at %s", (
     ]);
   });
 
+  it("forwards project activity reads to the daemon", async () => {
+    const snapshot = { projects: { "p 1": { lastActivityAt: "2024-05-01T00:00:00.000Z" } } };
+    daemon.respondWith({ statusCode: 200, headers: { "content-type": "application/json" }, body: JSON.stringify(snapshot) });
+
+    const response = await app.inject({ method: "GET", url: `${prefix}/projects/activity` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(snapshot);
+    expect(daemon.requests).toEqual([{ method: "GET", path: "/projects/activity", body: undefined }]);
+  });
+
   it("does not claim project reads", async () => {
     const response = await app.inject({ method: "GET", url: `${prefix}/projects` });
     expect(response.statusCode).toBe(404);

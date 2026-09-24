@@ -1,5 +1,6 @@
-import { api as defaultApi, type Project } from "../api";
+import { api as defaultApi, type Project } from "./../api";
 import { BrowserErrorReporter, machineBrowserErrorScope, projectBrowserErrorScope } from "../browserErrors";
+import { mergeProjectActivity } from "../projectActivity";
 import { selectedMachineId, type GetState, type NavigationDestinationOptions, type NavigationSelection, type SetState } from "./types";
 import type { WorkspaceController } from "./workspaceController";
 
@@ -14,7 +15,7 @@ export interface ProjectTrustChoice {
 }
 
 export interface ProjectControllerDependencies {
-  api?: Pick<typeof defaultApi, "projects" | "addProject" | "closeProject" | "workspaces" | "setWorkspaceTrust">;
+  api?: Pick<typeof defaultApi, "projects" | "projectActivity" | "addProject" | "closeProject" | "workspaces" | "setWorkspaceTrust">;
   navigateToProject?: (project: Project | undefined, options?: NavigationDestinationOptions) => Promise<boolean>;
   captureNavigation?: () => NavigationSelection;
 }
@@ -49,6 +50,13 @@ export class ProjectController {
       const projectIds = new Set(projects.map((project) => project.id));
       const workspacesByProjectId = Object.fromEntries(Object.entries(this.getState().workspacesByProjectId).filter(([projectId]) => projectIds.has(projectId)));
       this.setState({ projects, workspacesByProjectId });
+      // Recency is an ordering aid only; do not delay the project list while
+      // the daemon scans session metadata. A failed activity read leaves the
+      // browser-local stamps as-is.
+      void this.api.projectActivity(machineId).then((activity) => {
+        if (selectedMachineId(this.getState()) !== machineId) return;
+        this.setState({ projectActivityAt: mergeProjectActivity(this.getState().projectActivityAt, activity) });
+      }).catch(() => undefined);
     } catch (error) {
       this.loadErrors.set(machineId, String(error));
       this.browserErrors.report(machineBrowserErrorScope(machineId), String(error));

@@ -26,6 +26,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn().mockRejectedValue(failure),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn(),
           closeProject: vi.fn(),
           setWorkspaceTrust: vi.fn(),
@@ -51,6 +52,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn(),
           closeProject: vi.fn().mockRejectedValue(failure),
           setWorkspaceTrust: vi.fn(),
@@ -76,6 +78,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn().mockRejectedValue(failure),
           closeProject: vi.fn(),
           setWorkspaceTrust: vi.fn(),
@@ -107,6 +110,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
           setWorkspaceTrust: vi.fn().mockRejectedValue(failure),
@@ -138,6 +142,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn().mockResolvedValue([currentProject]),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn(),
           closeProject: vi.fn(),
           setWorkspaceTrust: vi.fn(),
@@ -150,6 +155,57 @@ describe("ProjectController", () => {
     expect(state.projects).toEqual([currentProject]);
     expect(state.workspacesByProjectId).toEqual({
       [currentProject.id]: [workspace(currentProject.id, currentProject.path)],
+    });
+  });
+
+  it("seeds browser-local activity stamps from the daemon snapshot on reload", async () => {
+    const currentProject = project("current", "/current");
+    let state: AppState = { ...initialAppState(), projectActivityAt: { [currentProject.id]: "2024-01-01T00:00:00.000Z" } };
+    const controller = new ProjectController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
+      {
+        api: {
+          workspaces: vi.fn().mockResolvedValue([]),
+          projects: vi.fn().mockResolvedValue([currentProject]),
+          projectActivity: vi.fn().mockResolvedValue({ projects: { [currentProject.id]: { lastActivityAt: "2024-02-01T00:00:00.000Z" } } }),
+          addProject: vi.fn(),
+          closeProject: vi.fn(),
+          setWorkspaceTrust: vi.fn(),
+        },
+      },
+    );
+
+    await controller.loadProjects();
+    await vi.waitFor(() => {
+      expect(state.projectActivityAt).toEqual({ [currentProject.id]: "2024-02-01T00:00:00.000Z" });
+    });
+  });
+
+  it("keeps project recency stamps when the activity snapshot fails and stays in cache", async () => {
+    const currentProject = project("current", "/current");
+    let state: AppState = { ...initialAppState(), projectActivityAt: { [currentProject.id]: "2024-01-01T00:00:00.000Z" } };
+    const controller = new ProjectController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
+      {
+        api: {
+          workspaces: vi.fn().mockResolvedValue([]),
+          projects: vi.fn().mockResolvedValue([currentProject]),
+          projectActivity: vi.fn().mockRejectedValue(new Error("unavailable")),
+          addProject: vi.fn(),
+          closeProject: vi.fn(),
+          setWorkspaceTrust: vi.fn(),
+        },
+      },
+    );
+
+    await controller.loadProjects();
+    await vi.waitFor(() => {
+      expect(state.projects).toEqual([currentProject]);
+      expect(state.projectActivityAt).toEqual({ [currentProject.id]: "2024-01-01T00:00:00.000Z" });
     });
   });
 
@@ -172,6 +228,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn(),
           closeProject: () => closeRequest,
           setWorkspaceTrust: vi.fn(),
@@ -211,6 +268,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
           setWorkspaceTrust: vi.fn(),
@@ -236,6 +294,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
           setWorkspaceTrust: vi.fn(),
@@ -274,6 +333,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
           setWorkspaceTrust,
@@ -299,6 +359,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
           setWorkspaceTrust,
@@ -331,6 +392,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
           setWorkspaceTrust,
@@ -362,6 +424,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
           setWorkspaceTrust,
@@ -396,7 +459,7 @@ describe("ProjectController", () => {
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
         api: {
-          projects: vi.fn(), closeProject: vi.fn(), workspaces, setWorkspaceTrust,
+          projects: vi.fn(), projectActivity: vi.fn().mockResolvedValue({ projects: {} }), closeProject: vi.fn(), workspaces, setWorkspaceTrust,
           addProject: async () => {
             if (phase === "creation") await pause();
             return addedProject;
@@ -442,7 +505,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: { projects: vi.fn(), closeProject: vi.fn(), addProject: vi.fn().mockResolvedValue(addedProject), workspaces, setWorkspaceTrust },
+        api: { projects: vi.fn(), projectActivity: vi.fn().mockResolvedValue({ projects: {} }), closeProject: vi.fn(), addProject: vi.fn().mockResolvedValue(addedProject), workspaces, setWorkspaceTrust },
         navigateToProject,
       },
     );
@@ -488,6 +551,7 @@ describe("ProjectController", () => {
         api: {
           workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn(),
+          projectActivity: vi.fn().mockResolvedValue({ projects: {} }),
           addProject: vi.fn(),
           closeProject: vi.fn().mockResolvedValue(undefined),
           setWorkspaceTrust: vi.fn(),

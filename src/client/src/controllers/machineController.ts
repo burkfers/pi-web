@@ -71,6 +71,7 @@ export class MachineController {
       activity: undefined,
       sessionStatuses: {},
       sessionActivities: {},
+      projectActivityAt: {},
       sendingPrompts: {},
       workspacesByProjectId: {},
       workspaceDeletionRuns: {},

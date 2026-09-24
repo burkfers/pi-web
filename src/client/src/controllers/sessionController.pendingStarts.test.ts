@@ -423,6 +423,28 @@ describe("SessionController pending starts", () => {
     expect(state.selectedSession?.id).toBe(started.id);
   });
 
+  it("stamps the workspace's project as recently active when its sessions load", async () => {
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const before = new Date(Date.parse("2024-05-01T00:00:00.000Z")).toISOString();
+    state.projectActivityAt = { "project-1": before };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: () => Promise.resolve([oldSession]),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket: new FakeSocket() },
+    );
+
+    await controller.refreshCurrentWorkspaceSessions();
+
+    const stamped = state.projectActivityAt["project-1"] ?? "";
+    expect(Date.parse(stamped)).toBeGreaterThan(Date.parse(before));
+  });
+
   it("tracks multiple pending session starts without blocking another start", async () => {
     const firstStarted: SessionInfo = { ...oldSession, id: "started-session-1", path: "/tmp/started-session-1.jsonl" };
     const secondStarted: SessionInfo = { ...oldSession, id: "started-session-2", path: "/tmp/started-session-2.jsonl" };

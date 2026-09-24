@@ -58,6 +58,7 @@ describe("MachineController", () => {
       selectedProject: project,
       selectedWorkspace: workspace,
       selectedSession: session,
+      projectActivityAt: { [project.id]: "2024-05-01T00:00:00.000Z" },
       error: "stale error",
     };
     const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
@@ -83,6 +84,7 @@ describe("MachineController", () => {
     expect(state.selectedProject).toBeUndefined();
     expect(state.selectedWorkspace).toBeUndefined();
     expect(state.selectedSession).toBeUndefined();
+    expect(state.projectActivityAt).toEqual({});
     expect(state.error).toBe("");
     expect(projects.loadProjects).toHaveBeenCalledOnce();
     expect(updateUrl).toHaveBeenCalledOnce();

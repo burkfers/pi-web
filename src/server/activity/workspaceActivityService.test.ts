@@ -22,7 +22,20 @@ function activityRecord() {
   return { service: new WorkspaceActivityService(onChanged), onChanged };
 }
 
-describe("WorkspaceActivityService", () => {
+  it("exposes the freshest session activity timestamp per cwd", () => {
+    const { service } = activityRecord();
+
+    service.applySessionActivity("/repo", { sessionId: "s1", phase: "active", label: "running", at: "2024-05-01T00:00:00.000Z" });
+    service.applySessionActivity("/repo", { sessionId: "s2", phase: "active", label: "running", at: "2024-05-02T00:00:00.000Z" });
+    service.applySessionActivity("/other", { sessionId: "s3", phase: "active", label: "running", at: "2024-04-01T00:00:00.000Z" });
+
+    expect(service.latestActivityAtByCwd()).toEqual(new Map([
+      ["/repo", "2024-05-02T00:00:00.000Z"],
+      ["/other", "2024-04-01T00:00:00.000Z"],
+    ]));
+  });
+
+  describe("WorkspaceActivityService", () => {
   it("records session activity by cwd and reports every change", () => {
     const { service, onChanged } = activityRecord();
 

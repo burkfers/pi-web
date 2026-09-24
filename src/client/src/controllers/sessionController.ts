@@ -12,6 +12,7 @@ import { ChatTranscriptStore } from "../chatTranscriptStore";
 import { isHistoryTailSlice } from "../chatHistoryCache";
 import { isShellInput } from "../inputModes";
 import { fileCompletionInsertText } from "../promptCompletions";
+import { recordProjectActivity } from "../projectActivity";
 import { SessionSocket, type GlobalSessionEvent, type SessionUiEvent } from "../sessionSocket";
 import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../sessionPersistence";
 import { isSessionActive } from "../../../shared/activity";
@@ -877,7 +878,11 @@ export class SessionController {
       if (selectedMachineId(this.getState()) !== machineId || this.getState().selectedWorkspace?.id !== workspace.id) return;
       const sessions = this.mergePendingStartSessions(workspace.path, listedSessions, machineId);
       const selectedSession = this.getState().selectedSession;
-      this.setState({ sessions });
+      this.setState({
+        sessions,
+        // Visiting a project is itself the freshest activity signal the browser owns.
+        projectActivityAt: recordProjectActivity(this.getState().projectActivityAt, workspace.projectId, new Date().toISOString()),
+      });
       const expected = this.navigationSelection();
       if (selectedSession === undefined) return;
       const refreshedSelected = sessions.find((session) => session.id === selectedSession.id);

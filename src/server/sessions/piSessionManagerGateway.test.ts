@@ -154,6 +154,18 @@ describe("Pi session manager gateway", () => {
     await expect(gateway.list(cwd)).resolves.toMatchObject([{ id: "session-elsewhere", cwd }]);
   });
 
+  it("lists cross-project activity from headers and mtimes without transcript summaries", async () => {
+    const sharedSessionDir = join(tempDir, "activity-sessions");
+    const path = await writeNamedSessionFile(sharedSessionDir, "activity.jsonl", { id: "activity-session", cwd });
+    await appendFile(path, `${JSON.stringify({ type: "message", id: "m1", message: { role: "user", content: "hello" } })}\n`, "utf8");
+    const gateway = createPiSessionManagerGateway(piProfileOptions({ PI_CODING_AGENT_SESSION_DIR: sharedSessionDir }));
+
+    if (gateway.listActivity === undefined) throw new Error("Expected activity listing");
+    const activity = await gateway.listActivity();
+    expect(activity).toMatchObject([{ cwd }]);
+    expect(activity[0]?.modified).toBeInstanceOf(Date);
+  });
+
   it("summarizes sessions whose transcript bodies contain unreadable lines", async () => {
     // The lightweight listing reads header + summary fields only; a corrupt or
     // half-written transcript line must not break the listing.

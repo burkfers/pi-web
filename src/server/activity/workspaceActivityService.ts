@@ -86,6 +86,22 @@ export class WorkspaceActivityService {
     return { workspaces: this.activeCwds().map((cwd) => this.summaryForCwd(cwd)) };
   }
 
+  /**
+   * Freshest session activity timestamp per cwd, over records that still carry
+   * activity. Idle sessions are pruned from the record, so these timestamps
+   * only ever raise a project's recency on top of durable sources.
+   */
+  latestActivityAtByCwd(): Map<string, string> {
+    const latest = new Map<string, string>();
+    for (const record of this.sessions.values()) {
+      const at = record.activity?.at;
+      if (at === undefined) continue;
+      const previous = latest.get(record.cwd);
+      if (previous === undefined || Date.parse(at) > Date.parse(previous)) latest.set(record.cwd, at);
+    }
+    return latest;
+  }
+
   private pruneIdleSession(sessionId: string): void {
     const record = this.sessions.get(sessionId);
     if (record !== undefined && !isSessionActive(record.status, record.activity)) this.sessions.delete(sessionId);

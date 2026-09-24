@@ -11,6 +11,7 @@ import { workspaceDeleteOperation } from "../../../shared/workspaceDeletion";
 import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/capabilities";
 import { machineScopedBundledPluginId, machineScopedManifestPluginId } from "../../../shared/machinePluginIds";
 import { AuthController } from "../controllers/authController";
+import { orderProjectsByRecentActivity } from "../projectActivity";
 import { MachineController } from "../controllers/machineController";
 import { MachineStatusController } from "../controllers/machineStatusController";
 import { ProjectController, type ProjectTrustChoice } from "../controllers/projectController";
@@ -1826,6 +1827,28 @@ export class PiWebApp extends LitElement {
 
   private workspaceDeletionInput: AppState["workspaceDeletionRuns"] | undefined;
   private deletingWorkspaceIds: string[] = [];
+  private cachedProjectOrder:
+    | { projects: readonly Project[]; activityAt: Readonly<Record<string, string>>; selectedId: string | undefined; ordered: Project[] }
+    | undefined;
+  private lastProjectOrder: Project[] | undefined;
+
+  /**
+   * Recency-ordered project list for the navigation pane, memoized on the
+   * inputs so transcript-only state changes keep the exact same array identity
+   * and do not force navigation list re-renders.
+   */
+  private displayedProjects(): Project[] {
+    const { projects, projectActivityAt, selectedProject } = this.state;
+    const selectedId = selectedProject?.id;
+    const cached = this.cachedProjectOrder;
+    if (cached?.projects === projects && cached.activityAt === projectActivityAt && cached.selectedId === selectedId) {
+      return cached.ordered;
+    }
+    const ordered = orderProjectsByRecentActivity(projects, projectActivityAt, selectedId, this.lastProjectOrder);
+    this.lastProjectOrder = ordered;
+    this.cachedProjectOrder = { projects, activityAt: projectActivityAt, selectedId, ordered };
+    return ordered;
+  }
 
   private renderNavigationPanel() {
     if (this.workspaceDeletionInput !== this.state.workspaceDeletionRuns) {
@@ -1844,7 +1867,7 @@ export class PiWebApp extends LitElement {
         .onToggleMachines=${this.navigationActions.toggleMachines}
         .onSelectMachine=${this.navigationActions.selectMachine}
         .onRemoveMachine=${this.navigationActions.removeMachine}
-        .projects=${this.state.projects}
+        .projects=${this.displayedProjects()}
         .selectedProject=${this.state.selectedProject}
         .workspaces=${this.state.workspaces}
         .selectedWorkspace=${this.state.selectedWorkspace}
