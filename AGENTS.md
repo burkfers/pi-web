@@ -1,15 +1,19 @@
 # Agent Notes
 
-This project is expected to run locally using split systemd user services:
+## Run model
+
+The repo build is not what the running instance serves: production runs from the container image, so a container rebuild is how committed source changes reach it. To exercise working-tree changes, use the isolated dev pair — it runs the session daemon, web/API, and Vite UI from this checkout, with its own data/agent directories and sessiond socket, seeded once from the production state:
+
+- `npm run dev:pair` (or `scripts/dev-pair.sh start` / `scripts/dev-pair.sh stop`), UI on `:8599`, API on `:8598`, log at `/tmp/pi-web-dev/dev.log`.
+
+Because the dev pair starts its own session daemon from source, changes to `src/server/sessiond.ts`, session runtime ownership, the session daemon protocol, or any daemon-only code path are picked up there with no production restart. Do not restart or stop the production session daemon to test a change; ask the user to rebuild the container when they want the change live.
+
+The production instance itself runs as split systemd user services:
 
 - `pi-web-sessiond.service` runs `npm run start:sessiond` in non-autoreload, non-auto-restart mode.
 - `pi-web-ui-dev.service` runs the web/API and Vite UI in dev autoreload mode with `npm run dev:web` and `npm run dev:client`.
 
 When working on this project, assume the session runtime owner is long-lived and separate from the autoreloading UI/API process. Browser disconnects and UI/API restarts should not stop active Pi sessions.
-
-If you make changes that affect `src/server/sessiond.ts`, session runtime ownership, the session daemon protocol, or any code path only loaded by the session daemon, inform the user that a manual restart of the session daemon is needed.
-
-Changes to the web/API/UI side generally only require the `pi-web-ui-dev.service` autoreload/restart path.
 
 ## Documentation boundaries
 
