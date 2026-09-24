@@ -4,7 +4,7 @@
 
 The repo build is not what the running instance serves: production runs from the container image, so a container rebuild is how committed source changes reach it. To exercise working-tree changes, use the isolated dev pair — it runs the session daemon, web/API, and Vite UI from this checkout, with its own data/agent directories and sessiond socket, seeded once from the production state:
 
-- `npm run dev:pair` (or `scripts/dev-pair.sh start` / `scripts/dev-pair.sh stop`), UI on `:8599`, API on `:8598`, log at `/tmp/pi-web-dev/dev.log`.
+- `npm run dev:pair` (or `scripts/dev-pair.sh start` / `scripts/dev-pair.sh stop`), UI on `:8599`, API on `:8598`, log at `/tmp/pi-web-dev/dev.log`. The user reaches the dev UI through the reverse proxy at http://dev.ai.btz.
 
 Because the dev pair starts its own session daemon from source, changes to `src/server/sessiond.ts`, session runtime ownership, the session daemon protocol, or any daemon-only code path are picked up there with no production restart. Do not restart or stop the production session daemon to test a change; ask the user to rebuild the container when they want the change live.
 
@@ -86,7 +86,7 @@ never push them. Upstream updates are `git fetch` + rebase with our commits on t
    do NOT point them at `/data/pi-web` or the production socket):
 
    ```sh
-   scripts/dev-pair.sh start   # UI http://localhost:8599/ , API :8598
+   scripts/dev-pair.sh start   # UI http://dev.ai.btz/ (reverse proxy; local listener :8599), API :8598
    scripts/dev-pair.sh stop    # only kills what this script started
    ```
 
