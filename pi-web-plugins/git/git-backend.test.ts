@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { ServerPluginActivationContext, ServerPluginExecFileResult } from "@jmfederico/pi-web/server-plugin-api";
 import { createServerPluginExecFile } from "../../src/server/plugins/serverPluginExec.js";
-import { gitDiff as requestGitDiff, gitStatus as requestGitStatus } from "./git-backend.js";
+import { gitBranches as requestGitBranches, gitCommit as requestGitCommit, gitDiff as requestGitDiff, gitHistory as requestGitHistory, gitStatus as requestGitStatus } from "./git-backend.js";
 
 // Isolate from any global/system git config and force a deterministic identity;
 // `protocol.file.allow` is required for `submodule add` from a local path.
@@ -52,6 +52,18 @@ function gitStatus(cwd: string) {
 
 function gitDiff(cwd: string, options: { path?: string; staged?: boolean }) {
   return requestGitDiff(backendContext, cwd, options, new AbortController().signal);
+}
+
+function gitHistory(cwd: string, options: Parameters<typeof requestGitHistory>[2] = {}) {
+  return requestGitHistory(backendContext, cwd, options, new AbortController().signal);
+}
+
+function gitCommit(cwd: string, oid: string) {
+  return requestGitCommit(backendContext, cwd, oid, new AbortController().signal);
+}
+
+function gitBranches(cwd: string) {
+  return requestGitBranches(backendContext, cwd, new AbortController().signal);
 }
 
 function git(cwd: string, args: string[]): string {
@@ -140,6 +152,128 @@ describe("Git changes backend", { timeout: FIXTURE_TEST_TIMEOUT_MS }, () => {
     await expect(requestGitDiff(context, tmpdir(), { path: "../outside" }, signal))
       .rejects.toThrow("Path traversal is not allowed");
     expect(execFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("Git history and branches backend", { timeout: FIXTURE_TEST_TIMEOUT_MS }, () => {
+  it("returns structured history with multiline messages, parents, and decorations", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-web-history-"));
+    created.push(dir);
+    git(dir, ["init", "-b", "main"]);
+    writeFileSync(join(dir, "file.txt"), "one\n");
+    git(dir, ["add", "file.txt"]);
+    git(dir, ["commit", "-m", "subject\n\nbody line"]);
+    const oid = git(dir, ["rev-parse", "HEAD"]).trim();
+    git(dir, ["tag", "v1"]);
+    writeFileSync(join(dir, "file.txt"), "two\n");
+    git(dir, ["commit", "-am", "second"]);
+
+    const history = await gitHistory(dir, { limit: 10 });
+    expect(history.commits).toHaveLength(2);
+    expect(history.commits[0]).toMatchObject({ subject: "second", parents: [oid] });
+    expect(history.commits[1]?.decorations).toContain("tag: v1");
+    expect(history.commits[1]?.body).toContain("body line");
+  });
+
+  it("includes commits from all refs in the all-refs scope", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-web-history-all-"));
+    created.push(dir);
+    git(dir, ["init", "-b", "main"]);
+    writeFileSync(join(dir, "main.txt"), "main\n");
+    git(dir, ["add", "main.txt"]);
+    git(dir, ["commit", "-m", "main commit"]);
+    git(dir, ["checkout", "--orphan", "other"]);
+    git(dir, ["rm", "-rf", "."]);
+    writeFileSync(join(dir, "other.txt"), "other\n");
+    git(dir, ["add", "other.txt"]);
+    git(dir, ["commit", "-m", "other commit"]);
+    git(dir, ["checkout", "main"]);
+
+    expect((await gitHistory(dir, { scope: "all" })).commits.map((commit) => commit.subject)).toContain("other commit");
+    expect((await gitHistory(dir, { scope: "current" })).commits.map((commit) => commit.subject)).not.toContain("other commit");
+  });
+
+  it("does not execute configured textconv commands while rendering a commit patch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-web-history-textconv-"));
+    created.push(dir);
+    const marker = join(dir, "textconv-ran");
+    git(dir, ["init", "-b", "main"]);
+    git(dir, ["config", "user.name", "Test"]);
+    writeFileSync(join(dir, "file.txt"), "hello\n");
+    writeFileSync(join(dir, ".gitattributes"), "file.txt diff=reviewtextconv\n");
+    git(dir, ["add", "file.txt", ".gitattributes"]);
+    git(dir, ["commit", "-m", "initial"]);
+    git(dir, ["config", "diff.reviewtextconv.textconv", `touch '${marker}'; cat`]);
+    const oid = git(dir, ["rev-parse", "HEAD"]).trim();
+
+    await gitCommit(dir, oid);
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("scopes history to a branch and returns commit stats and patch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-web-commit-"));
+    created.push(dir);
+    git(dir, ["init", "-b", "main"]);
+    writeFileSync(join(dir, "file.txt"), "one\n");
+    git(dir, ["add", "file.txt"]);
+    git(dir, ["commit", "-m", "initial"]);
+    git(dir, ["branch", "feature/name"]);
+    const oid = git(dir, ["rev-parse", "HEAD"]).trim();
+    writeFileSync(join(dir, "file.txt"), "two\n");
+    git(dir, ["commit", "-am", "change"]);
+
+    expect((await gitHistory(dir, { scope: "branch", ref: "feature/name" })).commits).toHaveLength(1);
+    const detail = await gitCommit(dir, oid);
+    expect(detail.commit.subject).toBe("initial");
+    expect(detail.files).toEqual([{ added: 1, deleted: 0, path: "file.txt" }]);
+    expect(detail.patch).toContain("+one");
+  });
+
+  it("returns a first-parent patch and matching stats for merge commits", async () => {
+    const base = mkdtempSync(join(tmpdir(), "pi-web-commit-merge-"));
+    created.push(base);
+    const dir = join(base, "repo");
+    git(base, ["init", "-b", "main", dir]);
+    writeFileSync(join(dir, "base.txt"), "base\n");
+    git(dir, ["add", "base.txt"]);
+    git(dir, ["commit", "-m", "base"]);
+    git(dir, ["checkout", "-b", "side"]);
+    writeFileSync(join(dir, "side.txt"), "side\n");
+    git(dir, ["add", "side.txt"]);
+    git(dir, ["commit", "-m", "side"]);
+    git(dir, ["checkout", "main"]);
+    writeFileSync(join(dir, "main.txt"), "main\n");
+    git(dir, ["add", "main.txt"]);
+    git(dir, ["commit", "-m", "main"]);
+    git(dir, ["merge", "--no-ff", "side", "-m", "merge"]);
+    const oid = git(dir, ["rev-parse", "HEAD"]).trim();
+
+    const detail = await gitCommit(dir, oid);
+
+    expect(detail.files).toEqual([{ added: 1, deleted: 0, path: "side.txt" }]);
+    expect(detail.patch).toContain("+side");
+  });
+
+  it("lists local and remote branches with current and worktree metadata", async () => {
+    const base = mkdtempSync(join(tmpdir(), "pi-web-branches-"));
+    created.push(base);
+    const dir = join(base, "repo");
+    git(base, ["init", "-b", "main", dir]);
+    writeFileSync(join(dir, "file.txt"), "one\n");
+    git(dir, ["add", "file.txt"]);
+    git(dir, ["commit", "-m", "initial"]);
+    git(dir, ["branch", "feature/name"]);
+    git(dir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(dir, ["worktree", "add", "-b", "other", join(base, "other")]);
+
+    const branches = await gitBranches(dir);
+    expect(branches.currentBranch).toBe("main");
+    expect(branches.detached).toBe(false);
+    expect(branches.branches.find((branch) => branch.name === "main")).toMatchObject({ isCurrent: true, checkedOutInCurrentWorktree: true });
+    expect(branches.branches.find((branch) => branch.name === "feature/name")).toMatchObject({ isRemote: false, isCurrent: false });
+    expect(branches.branches.find((branch) => branch.name === "origin/main")).toMatchObject({ isRemote: true });
+    expect(branches.branches.find((branch) => branch.name === "other")?.checkedOutInCurrentWorktree).toBe(false);
   });
 });
 

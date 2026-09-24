@@ -25,6 +25,16 @@ describe("Git selected-diff route", () => {
     expect(route.read()).toBe("src/a file.ts");
   });
 
+  it("round-trips log and branch selections while retaining the legacy diff key", () => {
+    window.history.replaceState({}, "", "/?project=p1&workspace=w1");
+    const route = createGitDiffRoute("git:workspace.git");
+    route.writeState({ mode: "log", branchName: "feature/name", commitOid: "abc1234" });
+    expect(route.readState()).toEqual({ mode: "log", branchName: "feature/name", commitOid: "abc1234" });
+    route.writeState({ mode: "branches", branchName: "origin/main" });
+    expect(route.readState()).toEqual({ mode: "branches", branchName: "origin/main" });
+    expect(new URL(window.location.href).searchParams.get("git.workspace.git--commit")).toBeNull();
+  });
+
   it("reads the former core namespace so the plugin can migrate existing deep links", () => {
     window.history.replaceState({}, "", "/?project=p1&workspace=w1&core.workspace.git--diff=README.md");
 

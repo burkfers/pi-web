@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   JsonValue,
   ServerPluginActivationContext,
@@ -8,10 +8,19 @@ import type {
   ServerPluginExecFileResult,
 } from "@jmfederico/pi-web/server-plugin-api";
 import {
+  GIT_BRANCHES_OPERATION,
+  GIT_COMMIT_OPERATION,
   GIT_DIFF_OPERATION,
+  GIT_HISTORY_OPERATION,
   GIT_STATUS_OPERATION,
+  type GitBranch,
+  type GitBranchesResponse,
+  type GitCommit,
+  type GitCommitDetailResponse,
+  type GitCommitFile,
   type GitDiffResponse,
   type GitFileState,
+  type GitHistoryResponse,
   type GitStatusFile,
   type GitStatusResponse,
 } from "./browser/git-contract.js";
@@ -57,6 +66,16 @@ export async function requestGitBackend(
   }
   if (request.operation === GIT_DIFF_OPERATION) {
     return diffPeerResponse(await gitDiffWithRunner(runGit, request.workspace.path, parseDiffInput(request.input)));
+  }
+  if (request.operation === GIT_HISTORY_OPERATION) {
+    return historyPeerResponse(await gitHistoryWithRunner(runGit, request.workspace.path, parseHistoryInput(request.input)));
+  }
+  if (request.operation === GIT_COMMIT_OPERATION) {
+    return commitPeerResponse(await gitCommitWithRunner(runGit, request.workspace.path, parseCommitInput(request.input)));
+  }
+  if (request.operation === GIT_BRANCHES_OPERATION) {
+    requireBranchesInput(request.input);
+    return branchesPeerResponse(await gitBranchesWithRunner(runGit, request.workspace.path));
   }
   throw new Error(`Unsupported Git workspace backend operation: ${request.operation}`);
 }
@@ -245,6 +264,195 @@ async function submoduleDiff(runGit: RunGit, owner: ValidatedSubmodule, path: st
   return { path, staged, hash: hash(result.stdout), diff: result.stdout, truncated: result.truncated };
 }
 
+export interface GitHistoryOptions {
+  scope?: "all" | "current" | "branch";
+  ref?: string;
+  limit?: number;
+}
+
+export async function gitHistory(
+  context: ServerPluginActivationContext,
+  cwd: string,
+  options: GitHistoryOptions,
+  signal: AbortSignal,
+): Promise<GitHistoryResponse> {
+  return gitHistoryWithRunner(createGitRunner(context, signal), cwd, options);
+}
+
+async function gitHistoryWithRunner(runGit: RunGit, cwd: string, options: GitHistoryOptions): Promise<GitHistoryResponse> {
+  const scope = options.scope ?? "all";
+  const limit = options.limit ?? 100;
+  const statusRevision = scope === "branch" ? options.ref ?? "HEAD" : "HEAD";
+  let revision: string | undefined;
+  if (scope === "current") revision = "HEAD";
+  if (scope === "branch") revision = options.ref;
+  if (scope === "branch" && revision === undefined) throw new Error("Git branch history requires a ref");
+  if (revision !== undefined && revision !== "HEAD") {
+    const resolved = await runGit(cwd, ["rev-parse", "--verify", `${revision}^{commit}`]);
+    if (resolved.code !== 0 || resolved.stdout.trim() === "") throw new Error(resolved.stderr.trim() || "Unable to resolve branch history");
+    revision = resolved.stdout.trim();
+  }
+  const args = ["log", `-n${String(Math.min(Math.max(limit, 1), 200))}`, "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00%B%x00"];
+  if (scope === "all") args.push("--all");
+  else if (revision !== undefined) args.push(revision);
+  const result = await runGit(cwd, args);
+  if (result.code !== 0) throw new Error(result.stderr.trim() || "git log failed");
+  const commits = parseHistoryRecords(result.stdout);
+  await classifyCommitStatuses(runGit, cwd, commits, statusRevision);
+  return { commits, truncated: result.truncated };
+}
+
+export async function gitCommit(
+  context: ServerPluginActivationContext,
+  cwd: string,
+  oid: string,
+  signal: AbortSignal,
+): Promise<GitCommitDetailResponse> {
+  return gitCommitWithRunner(createGitRunner(context, signal), cwd, oid);
+}
+
+async function gitCommitWithRunner(runGit: RunGit, cwd: string, oid: string): Promise<GitCommitDetailResponse> {
+  if (!/^[0-9a-f]{7,64}$/iu.test(oid)) throw new Error("Invalid Git commit id");
+  const [metadata, stats, patch] = await Promise.all([
+    runGit(cwd, ["show", "-s", "--format=%H%x00%h%x00%an%x00%ae%x00%aI%x00%s%x00%P%x00%D%x00%B%x00", oid]),
+    runGit(cwd, ["show", "--format=", "--numstat", "-z", "--no-renames", "--first-parent", oid]),
+    runGit(cwd, ["show", "--format=", "--patch", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--first-parent", oid]),
+  ]);
+  if (metadata.code !== 0) throw new Error(metadata.stderr.trim() || "Unable to read commit");
+  if (stats.code !== 0) throw new Error(stats.stderr.trim() || "Unable to read commit stats");
+  if (patch.code !== 0) throw new Error(patch.stderr.trim() || "Unable to read commit patch");
+  const commit = parseHistoryRecord(metadata.stdout);
+  if (commit === undefined) throw new Error("Git returned an empty commit record");
+  await classifyCommitStatuses(runGit, cwd, [commit], "HEAD");
+  return { commit, files: parseCommitFiles(stats.stdout), patch: patch.stdout, truncated: metadata.truncated || stats.truncated || patch.truncated };
+}
+
+export async function gitBranches(
+  context: ServerPluginActivationContext,
+  cwd: string,
+  signal: AbortSignal,
+): Promise<GitBranchesResponse> {
+  return gitBranchesWithRunner(createGitRunner(context, signal), cwd);
+}
+
+async function gitBranchesWithRunner(runGit: RunGit, cwd: string): Promise<GitBranchesResponse> {
+  const [refs, worktrees, current] = await Promise.all([
+    runGit(cwd, ["for-each-ref", "--format=%(refname)%00%(refname:short)%00%(objectname)%00%(upstream:short)%00%(upstream:track)%00%(committerdate:iso-strict)%00%(subject)%00%00", "refs/heads", "refs/remotes"]),
+    runGit(cwd, ["worktree", "list", "--porcelain", "-z"]),
+    runGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
+  ]);
+  if (refs.code !== 0) throw new Error(refs.stderr.trim() || "Unable to list Git branches");
+  if (worktrees.code !== 0) throw new Error(worktrees.stderr.trim() || "Unable to list Git worktrees");
+  const currentBranch = current.code === 0 ? normalizeBranch(current.stdout.trim()) : undefined;
+  const occupancy = parseWorktreeOccupancy(worktrees.stdout, cwd);
+  const branches = parseBranchRecords(refs.stdout, currentBranch, occupancy);
+  return { branches, ...(currentBranch === undefined ? {} : { currentBranch }), detached: currentBranch === undefined };
+}
+
+function parseHistoryRecords(raw: string): GitCommit[] {
+  const fields = raw.replaceAll("\0\n", "\0").split("\0");
+  const commits: GitCommit[] = [];
+  for (let index = 0; index < fields.length; index += 9) {
+    const parsed = parseHistoryRecord(fields.slice(index, index + 9).join("\0"));
+    if (parsed !== undefined) commits.push(parsed);
+  }
+  return commits;
+}
+
+function parseHistoryRecord(raw: string): GitCommit | undefined {
+  const fields = raw.split("\0");
+  if (fields.length < 9 || fields[0] === undefined) return undefined;
+  const oid = fields.at(0) ?? "";
+  const shortOid = fields.at(1) ?? "";
+  const authorName = fields.at(2) ?? "";
+  const authorEmail = fields.at(3) ?? "";
+  const authoredAt = fields.at(4) ?? "";
+  const subject = fields.at(5) ?? "";
+  const parents = fields.at(6) ?? "";
+  const decorations = fields.at(7) ?? "";
+  const body = fields.at(8) ?? "";
+  return { oid, shortOid, authorName, authorEmail, authoredAt, subject, body, parents: parents === "" ? [] : parents.split(" "), decorations: decorations === "" ? [] : decorations.split(",").map((entry) => entry.trim()).filter((entry) => entry !== ""), status: "neutral" };
+}
+
+async function classifyCommitStatuses(runGit: RunGit, cwd: string, commits: GitCommit[], revision: string): Promise<void> {
+  if (commits.length === 0) return;
+  const [currentResult, upstreamResult, branchesResult] = await Promise.all([
+    runGit(cwd, ["rev-list", revision]),
+    runGit(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${revision}@{upstream}`]),
+    runGit(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]),
+  ]);
+  const current = new Set(currentResult.code === 0 ? currentResult.stdout.split(/\s+/u).filter((oid) => oid !== "") : []);
+  const upstream = upstreamResult.code === 0 ? upstreamResult.stdout.trim() : "";
+  const remoteResult = upstream === "" ? undefined : await runGit(cwd, ["rev-list", upstream]);
+  const remote = new Set(remoteResult?.code === 0 ? remoteResult.stdout.split(/\s+/u).filter((oid) => oid !== "") : []);
+  const mainRefs = branchesResult.code === 0
+    ? branchesResult.stdout.split(/\r?\n/u).filter((name) => ["main", "master", "trunk", "develop"].includes(name))
+    : [];
+  const main = new Set<string>();
+  await Promise.all(mainRefs.map(async (ref) => {
+    const result = await runGit(cwd, ["rev-list", ref]);
+    if (result.code === 0) for (const oid of result.stdout.split(/\s+/u)) if (oid !== "") main.add(oid);
+  }));
+  for (const commit of commits) {
+    if (!current.has(commit.oid)) commit.status = "neutral";
+    else if (main.has(commit.oid)) commit.status = "merged";
+    else if (remote.has(commit.oid)) commit.status = "pushed";
+    else commit.status = "unpushed";
+  }
+}
+
+function parseCommitFiles(raw: string): GitCommitFile[] {
+  return raw.split("\0").flatMap((record) => {
+    const match = /^(\d+|-)\t(\d+|-)\t(.+)$/u.exec(record);
+    if (match === null) return [];
+    return [{ added: match[1] === "-" ? 0 : Number(match[1]), deleted: match[2] === "-" ? 0 : Number(match[2]), path: match[3] ?? "" }];
+  });
+}
+
+function parseBranchRecords(raw: string, currentBranch: string | undefined, occupancy: Map<string, string>): GitBranch[] {
+  return raw.split("\n").flatMap((record) => {
+    const fields = record.split("\0");
+    if (fields.length < 8) return [];
+    const [fullName, name, oid, upstream, track, committedAt, subject] = fields;
+    if (fullName === undefined || name === undefined || oid === undefined || upstream === undefined || track === undefined || committedAt === undefined || subject === undefined) return [];
+    const divergence = parseDivergence(track);
+    const checkedOutInWorktree = occupancy.get(name);
+    return [{
+      name,
+      fullName,
+      oid,
+      isRemote: fullName.startsWith("refs/remotes/"),
+      isCurrent: name === currentBranch,
+      ...(upstream === "" ? {} : { upstream }),
+      ...(divergence ?? {}),
+      ...(committedAt === "" ? {} : { committedAt }),
+      ...(subject === "" ? {} : { subject }),
+      ...(checkedOutInWorktree === undefined ? {} : { checkedOutInWorktree }),
+      checkedOutInCurrentWorktree: checkedOutInWorktree !== undefined && checkedOutInWorktree === occupancy.get(`current:${name}`),
+    }];
+  });
+}
+
+function parseDivergence(value: string): { ahead: number; behind: number } | undefined {
+  const ahead = /ahead (\d+)/u.exec(value)?.[1];
+  const behind = /behind (\d+)/u.exec(value)?.[1];
+  return ahead === undefined && behind === undefined ? undefined : { ahead: Number(ahead ?? 0), behind: Number(behind ?? 0) };
+}
+
+function parseWorktreeOccupancy(raw: string, cwd: string): Map<string, string> {
+  const result = new Map<string, string>();
+  for (const record of raw.split("\0\0")) {
+    const fields = record.split("\0");
+    const worktree = fields.find((field) => field.startsWith("worktree "))?.slice("worktree ".length);
+    const branch = fields.find((field) => field.startsWith("branch "))?.slice("branch ".length).replace(/^refs\/heads\//u, "");
+    if (branch !== undefined && worktree !== undefined) {
+      result.set(branch, worktree);
+      if (resolve(worktree) === resolve(cwd)) result.set(`current:${branch}`, worktree);
+    }
+  }
+  return result;
+}
+
 async function isUntracked(runGit: RunGit, cwd: string, path: string): Promise<boolean> {
   const result = await runGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z", "--", path]);
   return result.code === 0 && result.stdout.split("\0").includes(path);
@@ -425,6 +633,50 @@ function hash(value: string): string {
   return createHash("sha1").update(value).digest("hex");
 }
 
+function historyPeerResponse(history: GitHistoryResponse): JsonValue {
+  return { commits: history.commits.map(commitPeerValue), truncated: history.truncated };
+}
+
+function commitPeerResponse(detail: GitCommitDetailResponse): JsonValue {
+  return { commit: commitPeerValue(detail.commit), files: detail.files.map((file) => ({ added: file.added, deleted: file.deleted, path: file.path })), patch: detail.patch, truncated: detail.truncated };
+}
+
+function branchesPeerResponse(response: GitBranchesResponse): JsonValue {
+  return {
+    branches: response.branches.map((branch) => ({
+      name: branch.name,
+      fullName: branch.fullName,
+      oid: branch.oid,
+      isRemote: branch.isRemote,
+      isCurrent: branch.isCurrent,
+      ...(branch.upstream === undefined ? {} : { upstream: branch.upstream }),
+      ...(branch.ahead === undefined ? {} : { ahead: branch.ahead }),
+      ...(branch.behind === undefined ? {} : { behind: branch.behind }),
+      ...(branch.committedAt === undefined ? {} : { committedAt: branch.committedAt }),
+      ...(branch.subject === undefined ? {} : { subject: branch.subject }),
+      ...(branch.checkedOutInWorktree === undefined ? {} : { checkedOutInWorktree: branch.checkedOutInWorktree }),
+      checkedOutInCurrentWorktree: branch.checkedOutInCurrentWorktree,
+    })),
+    ...(response.currentBranch === undefined ? {} : { currentBranch: response.currentBranch }),
+    detached: response.detached,
+  };
+}
+
+function commitPeerValue(commit: GitCommit): JsonValue {
+  return {
+    oid: commit.oid,
+    shortOid: commit.shortOid,
+    authorName: commit.authorName,
+    authorEmail: commit.authorEmail,
+    authoredAt: commit.authoredAt,
+    subject: commit.subject,
+    body: commit.body,
+    parents: commit.parents,
+    decorations: commit.decorations,
+    status: commit.status,
+  };
+}
+
 function statusPeerResponse(status: GitStatusResponse): JsonValue {
   return {
     isGitRepo: status.isGitRepo,
@@ -480,6 +732,33 @@ function commandResult(result: ServerPluginExecFileResult, args: readonly string
 
 function requireStatusInput(input: JsonValue): void {
   if (input !== null) throw new Error("Git status input must be null");
+}
+
+function requireBranchesInput(input: JsonValue): void {
+  if (input !== null) throw new Error("Git branches input must be null");
+}
+
+function parseHistoryInput(input: JsonValue): GitHistoryOptions {
+  if (input === null) return {};
+  if (!isRecord(input)) throw new Error("Git history input must be an object");
+  const unsupported = Object.keys(input).find((key) => key !== "scope" && key !== "ref" && key !== "limit");
+  if (unsupported !== undefined) throw new Error(`Git history input contains an unsupported field: ${unsupported}`);
+  const scope = input["scope"];
+  const ref = input["ref"];
+  const limit = input["limit"];
+  if (scope !== undefined && scope !== "all" && scope !== "current" && scope !== "branch") throw new Error("Invalid Git history scope");
+  if (ref !== undefined && (typeof ref !== "string" || ref.trim() === "")) throw new Error("Git history ref must be a non-empty string");
+  if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 200)) throw new Error("Git history limit must be an integer from 1 to 200");
+  return { ...(scope === undefined ? {} : { scope }), ...(ref === undefined ? {} : { ref }), ...(limit === undefined ? {} : { limit }) };
+}
+
+function parseCommitInput(input: JsonValue): string {
+  if (!isRecord(input)) throw new Error("Git commit input must be an object");
+  const unsupported = Object.keys(input).find((key) => key !== "oid");
+  if (unsupported !== undefined) throw new Error(`Git commit input contains an unsupported field: ${unsupported}`);
+  const oid = input["oid"];
+  if (typeof oid !== "string" || !/^[0-9a-f]{7,64}$/iu.test(oid)) throw new Error("Git commit input oid must be a hexadecimal commit id");
+  return oid;
 }
 
 function parseDiffInput(input: JsonValue): { path?: string; staged?: boolean } {

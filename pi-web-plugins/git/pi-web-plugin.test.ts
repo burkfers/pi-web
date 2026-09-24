@@ -170,6 +170,102 @@ describe("bundled Git browser plugin", () => {
     render(null, container);
   });
 
+  it("loads log and branch modes, selects commits, and scopes branch logs without checkout", async () => {
+    window.history.replaceState({}, "", `/?project=${projectId}&workspace=${workspaceId}`);
+    const backend = backendFixture({ includeRepositoryViews: true });
+    const panel = requiredPanel(activate("git"));
+    const context = panelContext(backend.request);
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(panel.render(context), container);
+    await settleBackend();
+    render(panel.render(context), container);
+
+    button(container, "Log").click();
+    render(panel.render(context), container);
+    await settleBackend();
+    render(panel.render(context), container);
+    expect(backend.request).toHaveBeenCalledWith("history", { scope: "all", limit: 100 });
+    expect(container.textContent).toContain("Initial commit");
+    expect(container.querySelector(".git-author-initials")?.textContent).toBe("TU");
+    expect(container.querySelector(".git-commit-meta")?.textContent).not.toContain("2026");
+
+    button(container, "Initial commit").click();
+    await settleBackend();
+    render(panel.render(context), container);
+    expect(backend.request).toHaveBeenCalledWith("commit", { oid: "a".repeat(40) });
+    expect(container.querySelector('[role="table"][aria-label="Commit patch"]')).not.toBeNull();
+    expect(container.querySelector(".git-diff-cell.add")).not.toBeNull();
+    expect(container.querySelector(".git-diff-cell.remove")).not.toBeNull();
+    expect(container.querySelector(".git-stat-added")).not.toBeNull();
+    expect(container.querySelector(".git-stat-deleted")).not.toBeNull();
+    expect(container.textContent).toContain("test@example.com");
+    expect(container.textContent).toContain("2026");
+    expect(new URL(window.location.href).searchParams.get("git.workspace.git--commit")).toBe("a".repeat(40));
+
+    button(container, "Branches").click();
+    await settleBackend();
+    render(panel.render(context), container);
+    expect(container.textContent).toContain("feature/name");
+    expect(backend.request).toHaveBeenCalledWith("branches", null);
+    button(container, "feature/name").click();
+    render(panel.render(context), container);
+    const viewBranchButtons = [...container.querySelectorAll("button")].filter((candidate) => candidate.textContent.trim() === "View branch log");
+    viewBranchButtons[1]?.click();
+    await settleBackend();
+    render(panel.render(context), container);
+    expect(backend.request).toHaveBeenCalledWith("history", { scope: "branch", ref: "feature/name", limit: 100 });
+    expect(new URL(window.location.href).searchParams.get("git.workspace.git--branch")).toBe("feature/name");
+    expect(new URL(window.location.href).searchParams.get("git.workspace.git--view")).toBe("log");
+    render(null, container);
+  });
+
+  it("starts a fresh commit request when the selected commit changes", async () => {
+    window.history.replaceState({}, "", `/?project=${projectId}&workspace=${workspaceId}`);
+    const backend = backendFixture({ includeRepositoryViews: true });
+    const originalRequest = backend.request.getMockImplementation();
+    if (originalRequest === undefined) throw new Error("Expected backend implementation");
+    const commitRequests: { oid: string; resolve: (value: JsonValue) => void }[] = [];
+    const panel = requiredPanel(activate("git"));
+    const context = panelContext(backend.request);
+    const container = document.body.appendChild(document.createElement("div"));
+    render(panel.render(context), container);
+    await settleBackend();
+    render(panel.render(context), container);
+    backend.request.mockImplementation((operation, input) => {
+      if (operation === "commit") {
+        const oid = isRecord(input) && typeof input["oid"] === "string" ? input["oid"] : "";
+        return new Promise<JsonValue>((resolve) => { commitRequests.push({ oid, resolve }); });
+      }
+      if (operation === "history") return Promise.resolve({
+        commits: [
+          { oid: "1".repeat(40), shortOid: "1111111", authorName: "Test User", authorEmail: "test@example.com", authoredAt: "2026-01-01T00:00:00Z", subject: "First commit", body: "", parents: [], decorations: [], status: "neutral" },
+          { oid: "2".repeat(40), shortOid: "2222222", authorName: "Test User", authorEmail: "test@example.com", authoredAt: "2026-01-01T00:00:00Z", subject: "Second commit", body: "", parents: [], decorations: [], status: "neutral" },
+        ],
+        truncated: false,
+      });
+      return originalRequest(operation, input);
+    });
+    button(container, "Log").click();
+    await settleBackend();
+    render(panel.render(context), container);
+
+    button(container, "First commit").click();
+    render(panel.render(context), container);
+    button(container, "Second commit").click();
+    render(panel.render(context), container);
+    expect(commitRequests.map((request) => request.oid)).toEqual(["1".repeat(40), "2".repeat(40)]);
+
+    commitRequests[1]?.resolve({ commit: { oid: "2".repeat(40), shortOid: "2222222", authorName: "Test User", authorEmail: "test@example.com", authoredAt: "2026-01-01T00:00:00Z", subject: "Second commit", body: "", parents: [], decorations: [], status: "neutral" }, files: [], patch: "second", truncated: false });
+    await settleBackend();
+    render(panel.render(context), container);
+    expect(container.textContent).toContain("Second commit");
+    commitRequests[0]?.resolve({ commit: { oid: "1".repeat(40), shortOid: "1111111", authorName: "Test User", authorEmail: "test@example.com", authoredAt: "2026-01-01T00:00:00Z", subject: "First commit", body: "", parents: [], decorations: [], status: "neutral" }, files: [], patch: "first", truncated: false });
+    await settleBackend();
+    render(panel.render(context), container);
+    expect(container.textContent).toContain("Second commit");
+  });
+
   it.each([false, true])("keeps unchanged background polls quiet (selected diff: %s)", async (selected) => {
     vi.useFakeTimers();
     const backend = backendFixture();
@@ -466,7 +562,7 @@ function requiredPanel(contributions: ReturnType<typeof activate>) {
   return panel;
 }
 
-function backendFixture(patch: { files?: ReturnType<typeof changedFile>[]; submodules?: string[]; branch?: string } = {}) {
+function backendFixture(patch: { files?: ReturnType<typeof changedFile>[]; submodules?: string[]; branch?: string; includeRepositoryViews?: boolean } = {}) {
   const status = {
     isGitRepo: true,
     hash: `status-hash-${patch.branch ?? "main"}`,
@@ -480,6 +576,18 @@ function backendFixture(patch: { files?: ReturnType<typeof changedFile>[]; submo
       hash: `${status.hash}:${JSON.stringify(status.files)}`,
       files: [...status.files],
       submodules: [...status.submodules],
+    });
+    if (operation === "history" && patch.includeRepositoryViews === true) return Promise.resolve({
+      commits: [{ oid: "a".repeat(40), shortOid: "aaaaaaa", authorName: "Test User", authorEmail: "test@example.com", authoredAt: "2026-01-01T00:00:00Z", subject: "Initial commit", body: "Initial body", parents: [], decorations: ["HEAD -> main"], status: "unpushed" }],
+      truncated: false,
+    });
+    if (operation === "commit" && patch.includeRepositoryViews === true) return Promise.resolve({
+      commit: { oid: "a".repeat(40), shortOid: "aaaaaaa", authorName: "Test User", authorEmail: "test@example.com", authoredAt: "2026-01-01T00:00:00Z", subject: "Initial commit", body: "Initial body", parents: [], decorations: ["HEAD -> main"], status: "unpushed" },
+      files: [{ added: 1, deleted: 0, path: "README.md" }], patch: "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old value\n+new value", truncated: false,
+    });
+    if (operation === "branches" && patch.includeRepositoryViews === true) return Promise.resolve({
+      branches: [{ name: "main", fullName: "refs/heads/main", oid: "a".repeat(40), isRemote: false, isCurrent: true, checkedOutInCurrentWorktree: true, subject: "Initial commit" }, { name: "feature/name", fullName: "refs/heads/feature/name", oid: "a".repeat(40), isRemote: false, isCurrent: false, checkedOutInCurrentWorktree: false, subject: "Initial commit" }],
+      currentBranch: "main", detached: false,
     });
     const staged = isRecord(input) && input["staged"] === true;
     const path = isRecord(input) && typeof input["path"] === "string" ? input["path"] : "diff";

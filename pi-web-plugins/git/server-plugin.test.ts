@@ -218,7 +218,7 @@ describe("bundled Git workspace provider", () => {
       signal: new AbortController().signal,
     };
 
-    await expect(request({ ...context, operation: "history", input: null })).rejects.toThrow("Unsupported Git workspace backend operation");
+    await expect(request({ ...context, operation: "unknown", input: null })).rejects.toThrow("Unsupported Git workspace backend operation");
     await expect(request({ ...context, operation: GIT_STATUS_OPERATION, input: {} })).rejects.toThrow("status input must be null");
     await expect(request({ ...context, operation: GIT_DIFF_OPERATION, input: { path: "/outside" } })).rejects.toThrow("Absolute paths are not allowed");
     expect(execFile).not.toHaveBeenCalled();
