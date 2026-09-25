@@ -270,6 +270,7 @@ export class ChatView extends LitElement {
   private pendingScrollRestorePosition: ChatAnchorScrollPosition | undefined;
   private restoreScrollFrame: number | undefined;
   private prependRestoreToken = 0;
+  private resumeBottomPinningWhenVisible = false;
   @state() private loadMoreRequested = false;
   private readonly onViewportResize = () => {
     if (this.pinnedToBottom) this.scrollToBottom();
@@ -290,6 +291,20 @@ export class ChatView extends LitElement {
   private readonly onPageHide = () => {
     this.saveScrollPosition();
   };
+  private readonly onDocumentVisibilityChange = () => {
+    if (document.visibilityState === "hidden") {
+      this.resumeBottomPinningWhenVisible = this.pinnedToBottom;
+      return;
+    }
+    if (!this.resumeBottomPinningWhenVisible) return;
+    this.resumeBottomPinningWhenVisible = false;
+    this.pinnedToBottom = true;
+    if (this.scrollToBottomFrame !== undefined) {
+      cancelAnimationFrame(this.scrollToBottomFrame);
+      this.scrollToBottomFrame = undefined;
+    }
+    this.scrollToBottom();
+  };
   private readonly handleClearServerQueue = (): void => {
     this.onClearServerQueue?.();
   };
@@ -301,6 +316,7 @@ export class ChatView extends LitElement {
     super.connectedCallback();
     window.addEventListener("resize", this.onViewportResize);
     window.addEventListener("pagehide", this.onPageHide);
+    document.addEventListener("visibilitychange", this.onDocumentVisibilityChange);
     window.visualViewport?.addEventListener("resize", this.onViewportResize);
   }
 
@@ -327,6 +343,7 @@ export class ChatView extends LitElement {
     if (this.conversationRailFrame !== undefined) cancelAnimationFrame(this.conversationRailFrame);
     window.removeEventListener("resize", this.onViewportResize);
     window.removeEventListener("pagehide", this.onPageHide);
+    document.removeEventListener("visibilitychange", this.onDocumentVisibilityChange);
     window.visualViewport?.removeEventListener("resize", this.onViewportResize);
     super.disconnectedCallback();
   }
@@ -345,6 +362,7 @@ export class ChatView extends LitElement {
     this.suppressLoadMoreRequests = false;
     this.pendingScrollRestoreSessionId = undefined;
     this.pendingScrollRestorePosition = undefined;
+    this.resumeBottomPinningWhenVisible = false;
     this.prependRestoreToken += 1;
     if (this.restoreScrollFrame !== undefined) {
       cancelAnimationFrame(this.restoreScrollFrame);
