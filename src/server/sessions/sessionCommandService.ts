@@ -107,6 +107,7 @@ export class SessionCommandService<TSession extends CommandSession = CommandSess
       return { type: "unsupported", message: `Unknown command: /${name}` };
     }
 
+    if (name === "settings") return { type: "settings" };
     if (name === "session") return { type: "done", message: formatSessionStats(session) };
     if (name === "name") return this.nameSession(active, rest);
     if (name === "compact") return this.compact(session, rest);

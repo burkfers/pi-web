@@ -16,6 +16,8 @@ export type {
   SessionStatus as ClientSessionStatus,
   SessionModel as ClientSessionModel,
   SessionModelCatalogEntry as ClientSessionModelCatalogEntry,
+  PiSettingsSnapshot,
+  PiSettingsUpdate,
   ThinkingLevel as ClientThinkingLevel,
   SlashCommand as ClientCommand,
   FileSuggestion as ClientFileSuggestion,

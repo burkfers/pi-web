@@ -115,6 +115,13 @@ describe("SessionCommandService", () => {
     expect(active.runtime.session.setSessionName).toHaveBeenCalledTimes(1);
   });
 
+  it("opens Pi settings for the built-in settings command", async () => {
+    const active = activeSession();
+    const service = new SessionCommandService(() => getActive(active), vi.fn(), eventPublisher());
+
+    await expect(service.run("s1", "/settings")).resolves.toEqual({ type: "settings" });
+  });
+
   it("formats session stats", async () => {
     const active = activeSession();
     const service = new SessionCommandService(() => getActive(active), vi.fn(), eventPublisher());

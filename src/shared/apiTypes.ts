@@ -1112,6 +1112,50 @@ export interface SessionDefaultsUpdate {
   thinkingLevel?: import("./thinkingLevels.js").ThinkingLevel;
 }
 
+export type PiSettingsTransport = "sse" | "websocket" | "websocket-cached" | "auto";
+export type PiSettingsCacheWarming = "off" | "streaming" | "idle";
+export type PiSettingsProjectTrust = "ask" | "always" | "never";
+export type PiSettingsMode = "all" | "one-at-a-time";
+
+/** Settings that Pi's `/settings` can change for the active session or its agent profile. */
+export interface PiSettingsSnapshot {
+  autoCompact: boolean;
+  steeringMode: PiSettingsMode;
+  followUpMode: PiSettingsMode;
+  transport: PiSettingsTransport;
+  cacheWarming: PiSettingsCacheWarming;
+  httpIdleTimeoutMs: number;
+  defaultProjectTrust: PiSettingsProjectTrust;
+  showCacheMissNotices: boolean;
+  anthropicExtraUsageWarning: boolean;
+  /** Keys currently overridden by this workspace's trusted `.pi/settings.json`. */
+  projectOverrides: readonly PiSettingsKey[];
+  /** The saved value is consumed at session-daemon startup rather than live. */
+  restartRequired: readonly PiSettingsKey[];
+}
+
+export type PiSettingsKey =
+  | "autoCompact"
+  | "steeringMode"
+  | "followUpMode"
+  | "transport"
+  | "cacheWarming"
+  | "httpIdleTimeoutMs"
+  | "defaultProjectTrust"
+  | "showCacheMissNotices"
+  | "anthropicExtraUsageWarning";
+
+export type PiSettingsUpdate =
+  | { key: "autoCompact"; value: boolean }
+  | { key: "steeringMode"; value: PiSettingsMode }
+  | { key: "followUpMode"; value: PiSettingsMode }
+  | { key: "transport"; value: PiSettingsTransport }
+  | { key: "cacheWarming"; value: PiSettingsCacheWarming }
+  | { key: "httpIdleTimeoutMs"; value: number }
+  | { key: "defaultProjectTrust"; value: PiSettingsProjectTrust }
+  | { key: "showCacheMissNotices"; value: boolean }
+  | { key: "anthropicExtraUsageWarning"; value: boolean };
+
 export interface ThinkingLevelsResponse {
   levels: string[];
 }
@@ -1326,6 +1370,7 @@ export interface SessionStreamSnapshot {
 
 export type CommandResult =
   | { type: "done"; message?: string; session?: SessionInfo; promptDraft?: string }
+  | { type: "settings" }
   | { type: "select"; requestId: string; title: string; options: CommandOption[] }
   | { type: "tree"; tree: SessionTreeSnapshot }
   | { type: "unsupported"; message: string };

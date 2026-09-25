@@ -69,6 +69,8 @@ import type {
   SessionNotificationDismissRequest,
   SessionNotificationInboxSnapshot,
   SessionModelScopeMode,
+  PiSettingsSnapshot,
+  PiSettingsUpdate,
   SessionUnreadAcknowledgeRequest,
   SessionUnreadCatalogSnapshot,
   SessionWarning,
@@ -100,6 +102,7 @@ import {
 import { plainTextTheme } from "./plainTextTheme.js";
 import { SessionUnreadStore, type SessionUnreadMutation } from "./sessionUnreadStore.js";
 import { applyEnabledModelToggle, catalogWithEnabledFirst, modelScopeId, persistedEnabledModelPatterns, resolveEnabledModelIds, resolveSessionModelOptions, scopedModelsFromEnabledIds, type EnabledModelCatalogEntry } from "./sessionModelScope.js";
+import { applyPiSettingsUpdate, asPiSettingsSession, readPiSettingsSnapshot } from "./piSettings.js";
 
 /**
  * Minimal structured-logging seam, shaped like Fastify's logger so sessiond can
@@ -2439,6 +2442,19 @@ export class PiSessionService implements SessionRouteService {
   private assertDefaultsSettingsHealthy(settings: SettingsManager): void {
     const errors = settings.drainErrors();
     if (errors.length > 0) throw new Error(`Session defaults settings failed: ${errors.map(({ error }) => error.message).join("; ")}`);
+  }
+
+  async piSettings(ref: PiSessionRef): Promise<PiSettingsSnapshot> {
+    const session = await this.getOrOpen(ref);
+    return readPiSettingsSnapshot(asPiSettingsSession(session));
+  }
+
+  async setPiSetting(ref: PiSessionRef, update: PiSettingsUpdate): Promise<PiSettingsSnapshot> {
+    await this.assertWritable(ref);
+    const session = await this.getOrOpen(ref);
+    const result = await applyPiSettingsUpdate(asPiSettingsSession(session), update);
+    this.publishStatus(session);
+    return result;
   }
 
   async availableModels(ref: PiSessionRef): Promise<ClientSessionModel[]> {

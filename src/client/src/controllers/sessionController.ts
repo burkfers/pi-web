@@ -66,6 +66,7 @@ export interface SessionControllerDependencies {
   replacePromptEditorText?: (replacement: PromptEditorTextReplacement) => void | Promise<void>;
   onSelectedSessionReady?: (selection: SelectedSessionReady) => void;
   onModelScopeChanged?: (revision: number) => void;
+  onOpenPiSettings?: (session: SessionInfo, machineId: string) => void;
 }
 
 interface BulkSessionMutationResult {
@@ -133,6 +134,7 @@ export class SessionController {
   private readonly replacePromptEditorText: SessionControllerDependencies["replacePromptEditorText"];
   private readonly onSelectedSessionReady: SessionControllerDependencies["onSelectedSessionReady"];
   private readonly onModelScopeChanged: SessionControllerDependencies["onModelScopeChanged"];
+  private readonly onOpenPiSettings: SessionControllerDependencies["onOpenPiSettings"];
   private readonly captureNavigation: SessionControllerDependencies["captureNavigation"];
   private readonly beginNavigationOperation: SessionControllerDependencies["beginNavigationOperation"];
   private readonly browserErrors: BrowserErrorReporter;
@@ -175,6 +177,7 @@ export class SessionController {
     this.replacePromptEditorText = deps.replacePromptEditorText;
     this.onSelectedSessionReady = deps.onSelectedSessionReady;
     this.onModelScopeChanged = deps.onModelScopeChanged;
+    this.onOpenPiSettings = deps.onOpenPiSettings;
     this.captureNavigation = deps.captureNavigation;
     this.beginNavigationOperation = deps.beginNavigationOperation;
     this.browserErrors = new BrowserErrorReporter(getState, setState);
@@ -1828,6 +1831,11 @@ export class SessionController {
   }
 
   private async applyCommandResult(result: CommandResult, expected: NavigationSelection): Promise<void> {
+    if (result.type === "settings") {
+      const session = this.getState().selectedSession;
+      if (session !== undefined) this.onOpenPiSettings?.(session, selectedMachineId(this.getState()));
+      return;
+    }
     if (result.type === "select") {
       this.setState({ commandDialog: result });
       return;
@@ -1836,7 +1844,7 @@ export class SessionController {
       this.setState({ treeDialog: result.tree });
       return;
     }
-    const message = result.type === "unsupported" ? result.message : result.message;
+    const message = result.message;
     if (message !== undefined && message !== "") this.setState({ messages: [...this.getState().messages, textMessage(result.type === "unsupported" ? "system" : "tool", message)] });
     if (result.type !== "done" || result.session === undefined) return;
 

@@ -703,6 +703,29 @@ describe("session routes", () => {
     }
   });
 
+  it("serves and updates the active session's Pi settings", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const service = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, service, new SessionEventHub());
+    const cwd = resolve("/repo");
+    const url = "/sessions/session-1/pi-settings";
+    try {
+      const read = await routeApp.inject({ method: "GET", url: `${url}?cwd=${encodeURIComponent(cwd)}` });
+      expect(read.statusCode).toBe(200);
+      expect(read.json()).toMatchObject({ autoCompact: true, projectOverrides: [] });
+      const update = await routeApp.inject({ method: "PATCH", url, payload: { cwd, key: "steeringMode", value: "all" } });
+      expect(update.statusCode).toBe(200);
+      expect(service.piSettingsCalls).toEqual([{ id: "session-1", cwd }, { id: "session-1", cwd }]);
+      expect(service.piSettingCalls).toEqual([{ ref: { id: "session-1", cwd }, update: { key: "steeringMode", value: "all" } }]);
+      expect((await routeApp.inject({ method: "PATCH", url, payload: { cwd, key: "transport", value: "smoke" } })).statusCode).toBe(400);
+      expect((await routeApp.inject({ method: "GET", url })).statusCode).toBe(400);
+    } finally {
+      await service.dispose();
+      await routeApp.close();
+    }
+  });
+
   it("serves the full model catalog with per-model enabled state, forwarding workspace context", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1297,6 +1320,16 @@ describe("session routes", () => {
 
 class CapturingRouteSessionService implements SessionRouteService {
   defaultsCalls: { ref: SessionRouteRef; defaults?: import("../../shared/apiTypes.js").SessionDefaultsUpdate }[] = [];
+  piSettingsCalls: SessionRouteRef[] = [];
+  piSettingCalls: { ref: SessionRouteRef; update: import("../../shared/apiTypes.js").PiSettingsUpdate }[] = [];
+  piSettings(ref: SessionRouteRef): Promise<import("../../shared/apiTypes.js").PiSettingsSnapshot> {
+    this.piSettingsCalls.push(ref);
+    return Promise.resolve({ autoCompact: true, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", transport: "auto", cacheWarming: "streaming", httpIdleTimeoutMs: 300000, defaultProjectTrust: "ask", showCacheMissNotices: false, anthropicExtraUsageWarning: true, projectOverrides: [], restartRequired: ["httpIdleTimeoutMs"] });
+  }
+  setPiSetting(ref: SessionRouteRef, update: import("../../shared/apiTypes.js").PiSettingsUpdate): Promise<import("../../shared/apiTypes.js").PiSettingsSnapshot> {
+    this.piSettingCalls.push({ ref, update });
+    return this.piSettings(ref);
+  }
   getSessionDefaults(ref: SessionRouteRef): Promise<import("../../shared/apiTypes.js").SessionDefaults> {
     this.defaultsCalls.push({ ref });
     return Promise.resolve({ defaultThinkingLevel: "high" });

@@ -6,6 +6,7 @@ import { normalizeRequestCwd } from "../workingDirectory.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
 import type { SessionRouteRef, SessionRouteService } from "./sessionService.js";
 import { normalizeSessionCleanupRequest } from "./sessionCleanup.js";
+import { parsePiSettingsUpdate } from "./piSettings.js";
 
 interface SessionQuery {
   cwd?: string;
@@ -295,6 +296,25 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     try {
       const body = optionalRecord(request.body);
       return await sessions.cycleThinkingLevel(sessionRefFromBody(request.params.sessionId, body));
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.get<{ Params: { sessionId: string }; Querystring: SessionQuery }>(`${prefix}/sessions/:sessionId/pi-settings`, async (request, reply) => {
+    const ref = sessionRefFromQueryOr400(request.params.sessionId, request.query, reply);
+    if (ref === undefined) return reply;
+    try {
+      return await sessions.piSettings(ref);
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.patch<{ Params: { sessionId: string }; Body: unknown }>(`${prefix}/sessions/:sessionId/pi-settings`, async (request, reply) => {
+    try {
+      const body = requireRecord(request.body);
+      return await sessions.setPiSetting(sessionRefFromBody(request.params.sessionId, body), parsePiSettingsUpdate(body));
     } catch (error) {
       return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
     }

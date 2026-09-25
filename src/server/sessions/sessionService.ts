@@ -12,6 +12,8 @@ import type {
   SessionNotificationDismissRequest,
   SessionNotificationInboxSnapshot,
   SessionModelScopeMode,
+  PiSettingsSnapshot,
+  PiSettingsUpdate,
   SessionDefaults,
   SessionDefaultsUpdate,
   SessionUnreadAcknowledgeRequest,
@@ -84,6 +86,8 @@ export interface SessionRouteService {
   availableThinkingLevels(ref: SessionRouteRef): Promise<ClientThinkingLevel[]>;
   setThinkingLevel(ref: SessionRouteRef, level: string): Promise<ClientSessionStatus>;
   cycleThinkingLevel(ref: SessionRouteRef): Promise<ClientSessionStatus>;
+  piSettings(ref: SessionRouteRef): Promise<PiSettingsSnapshot>;
+  setPiSetting(ref: SessionRouteRef, update: PiSettingsUpdate): Promise<PiSettingsSnapshot>;
   commands(ref: SessionRouteRef): Promise<ClientCommand[]>;
   prompt(ref: SessionRouteRef, text: unknown, streamingBehavior?: unknown, attachments?: unknown): Promise<void>;
   saveAttachments(ref: SessionRouteRef, attachments: unknown, folder?: string): Promise<SavedPromptAttachment[]>;

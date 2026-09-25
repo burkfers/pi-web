@@ -11,7 +11,7 @@ import { MAX_INLINE_PREVIEW_BYTES } from "./workspaceFiles.js";
 export { PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS } from "./pluginBackendProtocol.js";
 export { WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS } from "./workspaceRemovalProtocol.js";
 
-export type FederatedHttpMethod = "GET" | "POST" | "PUT" | "DELETE";
+export type FederatedHttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export const PI_PACKAGE_MUTATION_PROXY_TIMEOUT_MS = 5 * 60_000;
 export const SESSION_TREE_NAVIGATION_PROXY_TIMEOUT_MS = 5 * 60_000;
@@ -142,6 +142,8 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "GET", path: "/sessions/:sessionId/thinking-levels" },
   { method: "POST", path: "/sessions/:sessionId/thinking-level" },
   { method: "POST", path: "/sessions/:sessionId/thinking-level/cycle" },
+  { method: "GET", path: "/sessions/:sessionId/pi-settings" },
+  { method: "PATCH", path: "/sessions/:sessionId/pi-settings" },
   { method: "GET", path: "/sessions/:sessionId/commands" },
   { method: "POST", path: "/sessions/:sessionId/prompt" },
   { method: "POST", path: "/sessions/:sessionId/queue/clear" },
