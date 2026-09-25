@@ -160,13 +160,15 @@ describe("mark-as-read actions", () => {
 });
 
 describe("sessionRowsForCurrentTree", () => {
-  it("keeps archived ancestors visible while they have unarchived descendants", () => {
+  it("excludes archived ancestors from the current tree even while they have unarchived descendants", () => {
+    // Archived state takes precedence over lineage: the archived parent belongs
+    // in the Archived section, and the unarchived child surfaces as a root. The
+    // parent is archived, not missing, so the child is not marked as an orphan.
     const parent = { ...session("parent"), archived: true, archivedAt: "2026-06-09T00:00:00.000Z" };
     const child = session("child", { parentSessionPath: parent.path });
 
     expect(rowSummaries(sessionRowsForCurrentTree([parent, child]))).toEqual([
-      { id: "parent", depth: 0, hasMissingParent: false },
-      { id: "child", depth: 1, hasMissingParent: false },
+      { id: "child", depth: 0, hasMissingParent: false },
     ]);
   });
 
@@ -198,6 +200,29 @@ describe("sessionRowsForCurrentTree", () => {
       { id: "child", depth: 0, hasMissingParent: true },
     ]);
   });
+});
+
+it("moves an archived parent into the Archived section even when its children are unarchived", async () => {
+  // Reproduces the reported layout: archiving a session that still had
+  // unarchived children used to keep the archived parent in the current tree,
+  // so the Archived section never appeared and the row looked unarchived.
+  const parent = { ...session("parent", { firstMessage: "Start a review of the changes" }), archived: true, archivedAt: "2026-06-09T00:00:00.000Z" };
+  const children = ["one", "two", "three"].map((name) => session(`child-${name}`, { parentSessionPath: parent.path }));
+  const list = sessionList([parent, ...children], new Set());
+  document.body.append(list);
+  await list.updateComplete;
+  const root = list.shadowRoot;
+  if (root === null) throw new Error("Missing session list shadow root");
+  const toggle = [...root.querySelectorAll<HTMLButtonElement>(".section-toggle")].find((button) => button.textContent.includes("Archived"));
+  if (toggle === undefined) throw new Error("Missing archive toggle");
+  toggle.click();
+  await list.updateComplete;
+
+  const archived = [...root.querySelectorAll<HTMLElement>(".action-row.archived")].map((row) => row.title);
+  expect(archived).toEqual([parent.path]);
+  // The unarchived children stay in the current list, now as roots.
+  const current = [...root.querySelectorAll<HTMLElement>(".action-row")].filter((row) => !row.className.includes("archived")).map((row) => row.title);
+  expect(current.sort()).toEqual(children.map((child) => child.path).sort());
 });
 
 it("orders archived rows by activity immediately after archiving while preserving parent-child nesting", async () => {

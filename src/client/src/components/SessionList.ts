@@ -709,11 +709,23 @@ export function sessionRowsForCurrentTree(sessions: SessionInfo[]): SessionRow[]
       seenPaths.add(parentKey);
       const parent = byPath.get(parentKey);
       if (parent === undefined) break;
-      visible.add(parent.id);
+      // Archived state wins over lineage: an archived ancestor is never pulled
+      // into the current tree, so it moves to the Archived section and its
+      // unarchived descendants surface as roots. Walking continues past it so an
+      // unarchived great-grandparent still shows.
+      if (parent.archived !== true) visible.add(parent.id);
       parentKey = parent.parentSessionPath === undefined ? undefined : normalizeSessionPath(parent.parentSessionPath);
     }
   }
-  return sessionRows(sessions.filter((session) => visible.has(session.id)));
+
+  // A child of an archived parent becomes a root, but its parent is not
+  // "unavailable" — it is archived and visible in the Archived section — so it
+  // is not marked as an orphan. The marker stays for parents genuinely absent
+  // from the listing.
+  return sessionRows(sessions.filter((session) => visible.has(session.id))).map((row) => {
+    if (!row.hasMissingParent || row.session.parentSessionPath === undefined) return row;
+    return byPath.has(normalizeSessionPath(row.session.parentSessionPath)) ? { ...row, hasMissingParent: false } : row;
+  });
 }
 
 function sessionRows(sessions: SessionInfo[]): SessionRow[] {
