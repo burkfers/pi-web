@@ -34,6 +34,23 @@ describe("SessionController send queue", () => {
     expect(promptArgs).toEqual({ attachments });
   });
 
+  it("opens the session-scoped Pi settings dialog for /settings", async () => {
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: oldSession, sessions: [oldSession] };
+    const opened: { session: SessionInfo; machineId: string }[] = [];
+    const api: typeof defaultApi = { ...defaultApi, runCommand: () => Promise.resolve({ type: "settings" }) };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket: new FakeSocket(), onOpenPiSettings: (session, machineId) => opened.push({ session, machineId }) },
+    );
+
+    await controller.send("/settings");
+
+    expect(opened).toEqual([{ session: oldSession, machineId: "local" }]);
+  });
+
   it("keeps the sending state scoped to the originating session when the user switches away", async () => {
     let resolvePrompt: (() => void) | undefined;
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, selectedSession: oldSession, sessions: [oldSession, replacementSession] };

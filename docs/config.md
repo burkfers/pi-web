@@ -35,6 +35,14 @@ Open the model or thinking-level selector and click a row’s star under **New s
 
 Defaults are saved in Pi’s global `settings.json` on the selected session’s machine (`~/.pi/agent/settings.json` by default), using `defaultProvider`, `defaultModel`, and `defaultThinkingLevel`. They apply to new sessions without restarting. Project `.pi/settings.json` overrides, explicit startup choices, and per-model thinking settings still take precedence. A default model must be enabled; otherwise startup falls back to the first enabled model. Resumed sessions keep their saved model and thinking level.
 
+## Pi settings from a session
+
+Enter `/settings` in a Pi session to open the web version of Pi's settings menu. It is separate from **Settings** in PI WEB, which configures the gateway and PI WEB itself.
+
+The web menu covers settings with useful browser-session behavior: auto-compact, steering and follow-up delivery, cache warming, provider transport, HTTP idle timeout, cache-miss notices, default project trust, and the Anthropic extra-usage warning. Changes are saved through Pi's `SettingsManager` on the selected session's machine. A trusted workspace `.pi/settings.json` override is shown as read-only.
+
+The HTTP idle timeout is saved immediately but applies to the shared session daemon only after that daemon restarts. Model selection, Pi packages, themes, and other Pi resources remain in their existing PI WEB controls. Terminal-only Pi settings, such as fullscreen TUI layout and terminal cursor behavior, are not shown in the web menu.
+
 ## Reverse-proxy deployment paths
 
 The deployment path is not a PI WEB config-file key or environment setting. The published client is portable: one build works at `/` and at canonical trailing-slash prefixes such as `/ai/` or `/test/ai/`.

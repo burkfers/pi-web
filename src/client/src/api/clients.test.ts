@@ -306,6 +306,22 @@ describe("session API compatibility", () => {
     expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo", text: "hello" });
   });
 
+  it("reads and updates Pi settings through an encoded machine route", async () => {
+    const snapshot = { autoCompact: true, steeringMode: "one-at-a-time" as const, followUpMode: "one-at-a-time" as const, transport: "auto" as const, cacheWarming: "streaming" as const, httpIdleTimeoutMs: 300000, defaultProjectTrust: "ask" as const, showCacheMissNotices: false, anthropicExtraUsageWarning: true, projectOverrides: [], restartRequired: ["httpIdleTimeoutMs" as const] };
+    const fetchMock = stubSequenceFetch([jsonResponse(snapshot), jsonResponse({ ...snapshot, steeringMode: "all" })]);
+    const ref = { id: "s /?", cwd: "/repo with spaces" };
+
+    await expect(sessionsApi.piSettings(ref, "remote /?")).resolves.toEqual(snapshot);
+    await expect(sessionsApi.setPiSetting(ref, { key: "steeringMode", value: "all" }, "remote /?")).resolves.toMatchObject({ steeringMode: "all" });
+
+    const [readUrl] = fetchCall(fetchMock, 0);
+    const [updateUrl, updateInit] = fetchCall(fetchMock, 1);
+    expect(readUrl).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/pi-settings?cwd=%2Frepo+with+spaces");
+    expect(updateUrl).toBe("https://pi.example.test/api/machines/remote%20%2F%3F/sessions/s%20%2F%3F/pi-settings");
+    expect(updateInit?.method).toBe("PATCH");
+    expect(JSON.parse(requestBody(updateInit))).toEqual({ cwd: "/repo with spaces", key: "steeringMode", value: "all" });
+  });
+
   it("clears a session queue through an encoded machine route and parses the returned status", async () => {
     const fetchMock = stubJsonFetch({
       sessionId: "s /?",

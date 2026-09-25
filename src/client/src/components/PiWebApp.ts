@@ -78,6 +78,7 @@ import "./MachineDialog";
 import type { MachineDialogSubmit } from "./MachineDialog";
 import { deepActiveElement, focusElement, hasRenderedModal } from "./modalLayerRegistry";
 import "./SettingsDialog";
+import "./PiSettingsDialog";
 import "./WorkspacePanel";
 import type { WorkspacePanelEmptyState } from "./WorkspacePanel";
 import "./appShell/AppContextBar";
@@ -191,6 +192,9 @@ export class PiWebApp extends LitElement {
       onModelScopeChanged: () => {
         this.modelDialogScopeInvalidation += 1;
         void this.refreshOpenModelDialog();
+      },
+      onOpenPiSettings: (session, machineId) => {
+        this.piSettingsSession = { sessionId: session.id, machineId };
       },
       replacePromptEditorText: async ({ machineId, sessionId, text }) => {
         await this.updateComplete;
@@ -325,6 +329,7 @@ export class PiWebApp extends LitElement {
   @state() private isRefreshingApp = false;
   @state() private sessionCleanupDialog: SessionCleanupDialogState | undefined;
   @state() private settingsSection: SettingsSection | undefined = readSettingsSection();
+  @state() private piSettingsSession: { sessionId: string; machineId: string } | undefined;
   @state() private shortcutConfig: PiWebShortcutConfig = {};
   @state() private workspaceUploadDefaultFolder = effectiveWorkspaceUploadFolder(undefined);
   @state() private workspaceAttachmentsDefaultFolder = effectiveWorkspaceAttachmentsFolder(undefined);
@@ -1481,10 +1486,16 @@ export class PiWebApp extends LitElement {
     this.settingsSection = readSettingsSection();
   }
 
+  private closePiSettings(): void {
+    this.piSettingsSession = undefined;
+  }
+
   private handleWorkspaceChange(previous: AppState, next: AppState) {
     if (selectedMachineId(previous) === selectedMachineId(next)
       && previous.selectedProject?.id === next.selectedProject?.id
       && previous.selectedWorkspace?.id === next.selectedWorkspace?.id) return;
+    if (this.piSettingsSession !== undefined
+      && (this.piSettingsSession.machineId !== selectedMachineId(next) || this.piSettingsSession.sessionId !== next.selectedSession?.id)) this.piSettingsSession = undefined;
     const gatewayPluginsLoading = this.gatewayPluginLoadPromise !== undefined && !this.gatewayPluginLoadAttemptComplete;
     if ((!this.routeRestoreInProgress || next.selectedWorkspace !== undefined) && !gatewayPluginsLoading) this.reconcileWorkspacePanelSelection();
     if (!this.routeRestoreInProgress) this.rememberCurrentMachineNavigation();
@@ -3602,6 +3613,7 @@ export class PiWebApp extends LitElement {
         ${this.sessionCleanupDialog !== undefined ? html`<session-cleanup-dialog .preview=${this.sessionCleanupDialog.preview} .previewRequest=${this.sessionCleanupDialog.previewRequest} .result=${this.sessionCleanupDialog.result} .loading=${this.sessionCleanupDialog.loading === true} .running=${this.sessionCleanupDialog.running === true} .error=${this.sessionCleanupDialog.error ?? ""} .onPreview=${(request: SessionCleanupRequest) => { void this.previewSessionCleanup(request); }} .onRun=${(request: SessionCleanupRequest) => { void this.runSessionCleanup(request); }} .onClose=${() => { this.closeSessionCleanupDialog(); }}></session-cleanup-dialog>` : null}
         ${state.themeDialog !== undefined ? html`<command-picker title=${state.themeDialog.title} .options=${state.themeDialog.options} .selectedValue=${state.themeDialog.selectedValue} .onPick=${(value: string) => { this.pickTheme(value); }} .onCancel=${() => { this.setState({ themeDialog: undefined }); }}></command-picker>` : null}
         ${this.settingsSection !== undefined ? html`<settings-dialog .section=${this.settingsSection} .machine=${state.selectedMachine} .machineRuntime=${this.selectedMachineRuntime()} .actions=${this.getDefaultActions()} .onNavigate=${(section: SettingsSection) => { this.navigateSettings(section); }} .onClose=${() => { this.closeSettings(); }} .onConfigSaved=${(config: PiWebConfigValues) => { this.applyClientConfig(config); }} .onRefreshMachineRuntime=${async (machineId: string) => { await this.machines.refreshMachineRuntime(machineId); }} .hiddenNavigationSections=${this.navigationPreferences.hiddenSections} .onToggleNavigationSection=${this.toggleHiddenNavigationSection} .eventGroupsExpandedByDefault=${this.eventGroupsExpandedByDefault} .onToggleEventGroupsExpandedByDefault=${this.toggleEventGroupsExpandedByDefault} .thinkingPartsExpandedByDefault=${this.thinkingPartsExpandedByDefault} .onToggleThinkingPartsExpandedByDefault=${this.toggleThinkingPartsExpandedByDefault}></settings-dialog>` : null}
+    ${this.piSettingsSession !== undefined && state.selectedSession?.id === this.piSettingsSession.sessionId && selectedMachineId(state) === this.piSettingsSession.machineId ? html`<pi-settings-dialog .session=${state.selectedSession} .machineId=${this.piSettingsSession.machineId} .machineLabel=${state.selectedMachine?.name ?? this.piSettingsSession.machineId} .onClose=${() => { this.closePiSettings(); }}></pi-settings-dialog>` : null}
       </div>
     `;
   }

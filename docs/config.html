@@ -281,6 +281,11 @@
 </tbody></table></div>
 <p id="completion-tools"><strong>Optional:</strong> install <code>fzf</code> on the server’s PATH for better file completion ranking. Completions also work without it.</p>
 </section>
+<section id="pi-session-settings"><h2>Pi settings from a session</h2>
+<p>Enter <code>/settings</code> in a Pi session to open the web version of Pi's settings menu. It is separate from <strong>Settings</strong> in PI WEB, which configures the gateway and PI WEB itself.</p>
+<p>The web menu covers auto-compact, steering and follow-up delivery, cache warming, provider transport, HTTP idle timeout, cache-miss notices, default project trust, and the Anthropic extra-usage warning. Changes are saved through Pi's <code>SettingsManager</code> on the selected session's machine. A trusted workspace <code>.pi/settings.json</code> override is shown as read-only.</p>
+<p>The HTTP idle timeout is saved immediately but applies to the shared session daemon only after that daemon restarts. Model selection, Pi packages, themes, and other Pi resources remain in their existing PI WEB controls. Terminal-only Pi settings are not shown in the web menu.</p>
+</section>
 <section id="file-settings"><h2>Files & uploads</h2>
 <p>Edit machine defaults in <strong>Settings → General</strong>. Use project config for repository-specific folders and access roots.</p>
 <div class="table-scroll" role="region" aria-label="File settings" tabindex="0">

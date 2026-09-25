@@ -216,6 +216,8 @@ describe("federated route contract", () => {
       ignoreParseFailure(sessionsApi.thinkingLevels(session, machineId)),
       ignoreParseFailure(sessionsApi.setThinkingLevel(session, "medium", machineId)),
       ignoreParseFailure(sessionsApi.cycleThinkingLevel(session, machineId)),
+      ignoreParseFailure(sessionsApi.piSettings(session, machineId)),
+      ignoreParseFailure(sessionsApi.setPiSetting(session, { key: "steeringMode", value: "all" }, machineId)),
       ignoreParseFailure(sessionsApi.commands(session, machineId)),
       ignoreParseFailure(sessionsApi.prompt(session, "hello", "followUp", machineId)),
       ignoreParseFailure(sessionsApi.saveAttachments(session, [{ kind: "image", mimeType: "image/png", data: "QUJD", name: "shot.png" }], machineId, "uploads")),
