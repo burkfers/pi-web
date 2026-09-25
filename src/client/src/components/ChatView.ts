@@ -263,7 +263,6 @@ export class ChatView extends LitElement {
   private groupedMessagesCache: ChatGroup[] = [];
   private readonly messageMetaCache = new WeakMap<ChatLine, string>();
   private readonly messageCopyTextCache = new WeakMap<ChatLine, string>();
-  private lastScrollTop = 0;
   private lastClientHeight = 0;
   private touchStartY: number | undefined;
   private pendingScrollRestoreSessionId: string | undefined;
@@ -411,7 +410,8 @@ export class ChatView extends LitElement {
       this.retainedEmptyNotificationTrayTargetKey = undefined;
     }
     if (changed.has("sessionId")) return;
-    if (changed.has("messages") || changed.has("pendingAsk") || changed.has("pendingDialogs") || changed.has("closedDialogs")) this.pinnedToBottom = this.pinnedToBottom && (this.didChatHeightChange() || this.isNearBottom());
+    // Layout and focus changes can emit scroll events without user intent; only an explicit scroll-up gesture may detach follow mode.
+    if (changed.has("messages") || changed.has("pendingAsk") || changed.has("pendingDialogs") || changed.has("closedDialogs")) this.pinnedToBottom = this.pinnedToBottom || this.isNearBottom();
   }
 
   protected override update(changed: Map<string, unknown>): void {
@@ -1123,16 +1123,13 @@ export class ChatView extends LitElement {
     if (!chat) return;
     const heightChanged = this.didChatHeightChange();
     const wasPinnedToBottom = this.pinnedToBottom;
-    const scrollingUp = chat.scrollTop < this.lastScrollTop;
     if (heightChanged && wasPinnedToBottom) {
       this.lastClientHeight = chat.clientHeight;
       this.scrollToBottom();
       return;
     }
     if (this.isAtBottom()) this.pinnedToBottom = true;
-    else if (scrollingUp) this.pinnedToBottom = false;
-    else this.pinnedToBottom = this.isNearBottom();
-    this.lastScrollTop = chat.scrollTop;
+    else if (!this.pinnedToBottom) this.pinnedToBottom = this.isNearBottom();
     this.lastClientHeight = chat.clientHeight;
   }
 
@@ -1196,7 +1193,6 @@ export class ChatView extends LitElement {
       if (!chat) return;
       this.withSuppressedScrollSave(() => {
         chat.scrollTop = chat.scrollHeight;
-        this.lastScrollTop = chat.scrollTop;
         this.lastClientHeight = chat.clientHeight;
       });
     });
@@ -1323,7 +1319,6 @@ export class ChatView extends LitElement {
   private syncScrollMetrics(): void {
     const chat = this.chat;
     if (chat === undefined) return;
-    this.lastScrollTop = chat.scrollTop;
     this.lastClientHeight = chat.clientHeight;
   }
 
@@ -1349,7 +1344,6 @@ export class ChatView extends LitElement {
       const chat = this.chat;
       if (!chat || token !== this.prependRestoreToken) return;
       restorePrependScrollAnchor(chat, anchor, anchor.markerId === undefined ? undefined : this.scrollMarkerAt(anchor.markerId));
-      this.lastScrollTop = chat.scrollTop;
       frames += 1;
       // Formatted markdown/code layout can settle after Lit's first render. Re-apply
       // the marker anchor briefly so late height changes above the viewport do not

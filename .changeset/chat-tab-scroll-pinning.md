@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Keep the chat pinned to the latest response when returning to a background browser tab or refocusing the browser window.
+Keep the chat pinned to the latest response across background tabs, window refocus, and session switches without detaching on layout-driven scroll events.

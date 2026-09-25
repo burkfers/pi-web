@@ -67,6 +67,21 @@ describe("ChatView visibility scroll pinning", () => {
     expect(chat.scrollTop).toBe(1000);
   });
 
+  it("does not detach a following chat on a non-user scroll adjustment", async () => {
+    const { view, chat } = await mountView();
+    setScrollGeometry(chat, { scrollTop: 700, scrollHeight: 1000, clientHeight: 300 });
+    Reflect.set(view, "pinnedToBottom", true);
+
+    chat.scrollTop = 320;
+    chat.dispatchEvent(new Event("scroll"));
+    view.messages = [{ role: "assistant", parts: [{ type: "text", text: "new output" }] }];
+    await view.updateComplete;
+    await nextAnimationFrame();
+
+    expect(Reflect.get(view, "pinnedToBottom")).toBe(true);
+    expect(chat.scrollTop).toBe(1000);
+  });
+
   it("does not override a reading position that was detached before the tab was hidden", async () => {
     const { view, chat } = await mountView();
     setScrollGeometry(chat, { scrollTop: 250, scrollHeight: 1000, clientHeight: 300 });
