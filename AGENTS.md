@@ -95,6 +95,10 @@ steps that build on each other, each commit compiling and standing on its own.
   read-only log and branch browsing are the model: separate, layered, and
   individually reviewable. Do not collapse a feature into one commit just
   because it has one goal.
+- **Always commit at a testing checkpoint.** Once a checkpoint has been tested,
+  commit the tested working tree even if more work may follow. Later commits may
+  amend or fixup that checkpoint when they revise the same work, but do not leave
+  tested checkpoint changes uncommitted merely because more work is planned.
 - **Fold in the changes that are not a step.** Amend or fixup-squash a commit
   when the new work revises course, rewrites what an earlier commit did, or is
   too trivial to stand alone — a follow-up fix, a doc clarification, a small
