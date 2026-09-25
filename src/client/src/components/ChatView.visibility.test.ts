@@ -4,6 +4,7 @@ import { ChatView } from "./ChatView";
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.clear();
   setDocumentVisibility("visible");
 });
 
@@ -39,6 +40,30 @@ describe("ChatView visibility scroll pinning", () => {
     await nextAnimationFrame();
 
     expect(Reflect.get(view, "pinnedToBottom")).toBe(true);
+    expect(chat.scrollTop).toBe(1000);
+  });
+
+  it("keeps a newly selected session in follow mode until its saved position is restored", async () => {
+    const { view, chat } = await mountView();
+    view.sessionId = "session-a";
+    await view.updateComplete;
+    setScrollGeometry(chat, { scrollTop: 0, scrollHeight: 1000, clientHeight: 300 });
+    Reflect.set(view, "pinnedToBottom", false);
+    Object.defineProperties(chat, {
+      scrollHeight: { configurable: true, value: 0 },
+      clientHeight: { configurable: true, value: 0 },
+    });
+
+    view.sessionId = "session-b";
+    await view.updateComplete;
+    await nextAnimationFrame();
+
+    expect(Reflect.get(view, "pinnedToBottom")).toBe(true);
+
+    setScrollGeometry(chat, { scrollTop: 0, scrollHeight: 1000, clientHeight: 300 });
+    window.dispatchEvent(new Event("focus"));
+    await nextAnimationFrame();
+
     expect(chat.scrollTop).toBe(1000);
   });
 

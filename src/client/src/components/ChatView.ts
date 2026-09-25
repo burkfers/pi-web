@@ -296,9 +296,10 @@ export class ChatView extends LitElement {
   }
 
   private resumeBottomPinningOnForeground(): void {
-    if (!this.resumeBottomPinningOnForegroundPending) return;
+    const wasFollowingBeforeForegroundLoss = this.resumeBottomPinningOnForegroundPending;
+    if (!wasFollowingBeforeForegroundLoss && !this.pinnedToBottom) return;
     this.resumeBottomPinningOnForegroundPending = false;
-    this.pinnedToBottom = true;
+    if (wasFollowingBeforeForegroundLoss) this.pinnedToBottom = true;
     if (this.scrollToBottomFrame !== undefined) {
       cancelAnimationFrame(this.scrollToBottomFrame);
       this.scrollToBottomFrame = undefined;
@@ -381,10 +382,15 @@ export class ChatView extends LitElement {
     this.pendingScrollRestoreSessionId = undefined;
     this.pendingScrollRestorePosition = undefined;
     this.resumeBottomPinningOnForegroundPending = false;
+    this.pinnedToBottom = true;
     this.prependRestoreToken += 1;
     if (this.restoreScrollFrame !== undefined) {
       cancelAnimationFrame(this.restoreScrollFrame);
       this.restoreScrollFrame = undefined;
+    }
+    if (this.scrollToBottomFrame !== undefined) {
+      cancelAnimationFrame(this.scrollToBottomFrame);
+      this.scrollToBottomFrame = undefined;
     }
     if (this.scrollToOpenAskFrame !== undefined) {
       cancelAnimationFrame(this.scrollToOpenAskFrame);
@@ -404,6 +410,7 @@ export class ChatView extends LitElement {
       this.pendingNotificationFocus = undefined;
       this.retainedEmptyNotificationTrayTargetKey = undefined;
     }
+    if (changed.has("sessionId")) return;
     if (changed.has("messages") || changed.has("pendingAsk") || changed.has("pendingDialogs") || changed.has("closedDialogs")) this.pinnedToBottom = this.pinnedToBottom && (this.didChatHeightChange() || this.isNearBottom());
   }
 
