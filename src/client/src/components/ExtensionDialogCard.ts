@@ -286,7 +286,7 @@ export class ExtensionDialogCard extends LitElement {
     }
     .card-header {
       position: sticky;
-      top: var(--pi-chat-sticky-top, 0px);
+      top: calc(-1 * var(--pi-chat-sticky-inset, 0px));
       z-index: 6;
       display: flex;
       align-items: center;

@@ -179,7 +179,7 @@ export class AppContextBar extends LitElement {
   static override styles = css`
     /* Keep the refresh menu in this shadow tree above the following mobile tab strip. */
     :host { position: relative; z-index: 20; flex: 0 0 auto; min-width: 0; }
-    .context-bar { position: relative; flex: 0 0 auto; min-width: 0; display: flex; align-items: center; gap: 0; padding: 6px 0; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-bg); }
+    .context-bar { position: relative; flex: 0 0 auto; min-width: 0; display: flex; align-items: center; gap: 0; padding: 4px 0; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-bg); }
     .context-bar::before, .context-bar::after { content: ""; position: absolute; top: 0; bottom: 0; z-index: 2; width: 20px; opacity: 0; pointer-events: none; transition: opacity .15s ease; }
     .context-bar::before { left: 0; background: linear-gradient(90deg, color-mix(in srgb, var(--pi-shadow-strong) 55%, transparent) 0%, transparent 100%); }
     .context-bar::after { right: 0; background: linear-gradient(270deg, color-mix(in srgb, var(--pi-shadow-strong) 55%, transparent) 0%, transparent 100%); }
@@ -202,6 +202,11 @@ export class AppContextBar extends LitElement {
     .context-kind { display: none; }
     .context-value { min-width: 0; overflow: visible; text-overflow: clip; white-space: nowrap; }
     button { cursor: pointer; }
+    @media (pointer: coarse) {
+      /* Chips are ~29px tall; extend the hit area sideways rather than growing the bar. */
+      button.context-chip { position: relative; }
+      button.context-chip::after { content: ""; position: absolute; inset: -3px -2px; }
+    }
   `;
 }
 

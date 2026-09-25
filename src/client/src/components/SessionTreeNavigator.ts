@@ -551,7 +551,11 @@ export class SessionTreeNavigator extends LitElement {
     .tree-row.active-path:not(.selected) { background: color-mix(in srgb, var(--pi-accent) 7%, var(--pi-surface)); }
     .tree-row.active-leaf { box-shadow: inset 3px 0 var(--pi-accent); }
     .tree-row.bookkeeping { color: var(--pi-muted); }
-    .disclosure { width: 20px; height: 28px; display: grid; place-items: center; border-radius: 5px; color: var(--pi-muted); font-size: 15px; user-select: none; }
+    .disclosure { position: relative; width: 20px; height: 28px; display: grid; place-items: center; border-radius: 5px; color: var(--pi-muted); font-size: 15px; user-select: none; }
+    @media (pointer: coarse) {
+      .disclosure { width: 24px; }
+      .disclosure::after { content: ""; position: absolute; inset: -3px -5px; }
+    }
     .disclosure:not(.leaf):hover { color: var(--pi-text); background: var(--pi-surface-hover); }
     .disclosure.leaf { opacity: .5; }
     .metadata { display: contents; }

@@ -609,6 +609,11 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .rename-cancel { border: 1px solid var(--pi-border); border-radius: 8px; background: transparent; }
     .action-main.selecting { padding-left: calc(32px + var(--depth, 0) * 16px); }
     .session-checkbox { position: absolute; top: 9px; left: calc(8px + var(--depth, 0) * 16px); z-index: 2; margin: 0; }
+    @media (pointer: coarse) {
+      .bulk-select-entry { width: var(--pi-touch-target-min, 34px); height: var(--pi-touch-target-min, 34px); }
+      .start-session-button { min-width: var(--pi-touch-target-min, 34px); height: var(--pi-touch-target-min, 34px); }
+      .cleanup-entry, .bulk-row button, .rename-actions button { min-height: var(--pi-touch-target-min, 34px); }
+    }
   `];
 }
 

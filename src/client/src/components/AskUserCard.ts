@@ -409,7 +409,7 @@ export class AskUserCard extends LitElement {
     }
     .card-header {
       position: sticky;
-      top: var(--pi-chat-sticky-top, 0px);
+      top: calc(-1 * var(--pi-chat-sticky-inset, 0px));
       z-index: 6;
       display: flex;
       align-items: center;
@@ -470,6 +470,9 @@ export class AskUserCard extends LitElement {
       padding-inline-start: calc(var(--question-number-column) + var(--question-copy-gap));
     }
     .options { display: grid; gap: 7px; }
+    @media (pointer: coarse) {
+      .option { min-height: var(--pi-touch-target-min, 34px); }
+    }
     legend + .options { margin-top: 10px; }
     .option {
       display: grid;
