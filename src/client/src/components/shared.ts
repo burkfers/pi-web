@@ -435,8 +435,9 @@ export const chatStyles = css`
   .msg:hover > .msg-header .msg-actions, .msg:focus-within > .msg-header .msg-actions, .group-msg:hover > .msg-header .msg-actions, .group-msg:focus-within > .msg-header .msg-actions { opacity: 1; }
   .label { display: block; color: var(--pi-muted); font-size: 12px; text-transform: uppercase; }
   .msg-header .label { margin: 0; }
-  .msg-meta { min-width: 0; opacity: .28; border: 0; background: transparent; color: var(--pi-dim); padding: 0; font: 11px system-ui, sans-serif; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .12s ease; cursor: pointer; user-select: text; -webkit-user-select: text; }
-  .msg:hover > .msg-header .msg-meta, .msg:focus-within > .msg-header .msg-meta, .group-msg:hover > .msg-header .msg-meta, .group-msg:focus-within > .msg-header .msg-meta, .msg-meta:focus, .msg-meta.expanded { opacity: 1; }
+  /* Secondary metadata, not a hint: --pi-dim at .28 opacity measured 1.37:1 on the page background. Resting state is --pi-muted at .85, which lands at AA (about 4.7:1 dark, 4.9:1 catppuccin) without reaching AAA's 7:1. Hover/focus/expanded steps up the ramp to --pi-text-secondary, because a .85 to 1.0 opacity nudge alone was too close to read as a state change. */
+  .msg-meta { min-width: 0; opacity: .85; border: 0; background: transparent; color: var(--pi-muted); padding: 0; font: 11px system-ui, sans-serif; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .12s ease, opacity .12s ease; cursor: pointer; user-select: text; -webkit-user-select: text; }
+  .msg:hover > .msg-header .msg-meta, .msg:focus-within > .msg-header .msg-meta, .group-msg:hover > .msg-header .msg-meta, .group-msg:focus-within > .msg-header .msg-meta, .msg-meta:focus, .msg-meta.expanded { opacity: 1; color: var(--pi-text-secondary); }
   .msg-meta.expanded { flex: 1 1 auto; max-width: 100%; white-space: normal; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; }
   .msg-meta:focus { outline: 1px solid var(--pi-border); outline-offset: 3px; border-radius: 4px; }
   @media (hover: none) {
