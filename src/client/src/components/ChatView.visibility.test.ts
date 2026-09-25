@@ -26,6 +26,22 @@ describe("ChatView visibility scroll pinning", () => {
     expect(chat.scrollTop).toBe(1000);
   });
 
+  it("re-pins when a bottom-following browser window regains focus", async () => {
+    const { view, chat } = await mountView();
+    setScrollGeometry(chat, { scrollTop: 120, scrollHeight: 1000, clientHeight: 300 });
+    Reflect.set(view, "pinnedToBottom", true);
+
+    window.dispatchEvent(new Event("blur"));
+    Reflect.set(view, "pinnedToBottom", false);
+    chat.scrollTop = 320;
+
+    window.dispatchEvent(new Event("focus"));
+    await nextAnimationFrame();
+
+    expect(Reflect.get(view, "pinnedToBottom")).toBe(true);
+    expect(chat.scrollTop).toBe(1000);
+  });
+
   it("does not override a reading position that was detached before the tab was hidden", async () => {
     const { view, chat } = await mountView();
     setScrollGeometry(chat, { scrollTop: 250, scrollHeight: 1000, clientHeight: 300 });
