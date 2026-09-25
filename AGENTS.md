@@ -57,8 +57,58 @@ Never report failed, incomplete, or skipped verification as passing. Identify an
 # pi-web — local working clone
 
 This checkout is the build source for the Docker container (`workspaces/pi-web`
-inside the image build context). Local patches are commits on top of upstream;
-never push them. Upstream updates are `git fetch` + rebase with our commits on top.
+inside the image build context). `local` is our default branch: local patches are
+commits on top of upstream, and it may be pushed to `origin` when the user
+instructs it. Remotes: `origin` is our fork (`burkfers/pi-web`) and `upstream` is
+the canonical project (`jmfederico/pi-web`). "Downstream" changes come from
+`upstream`, never from `origin`. Upstream updates are `git fetch` + rebase with
+our commits on top — see [Downstreaming](#downstreaming) below.
+
+## Downstreaming
+
+When asked to pull upstream changes into `local`:
+
+1. `git fetch upstream` (read-only; never push without being told).
+2. Triage quickly, without deep research, for conflicts or duplicated work:
+   - Our commits upstream lacks: `git log --oneline upstream/main..local`
+   - Upstream's new commits: `git log --oneline local..upstream/main`
+   - Overlap: compare files touched by each side since the merge base, and scan
+     upstream's new commit subjects against ours.
+3. If upstream implemented something similar to one of our commits, **abort and
+   present it to the user** rather than rebasing — upstream may have superseded
+   the local change, and the call is theirs.
+4. Otherwise `git rebase upstream/main` (from `local`), resolve any conflicts,
+   then run the focused tests, typecheck, and lint for the touched code.
+5. Summarize the upstream changes that were integrated. Describe what changed
+   for users — new capabilities, behavior changes, fixes — and gloss over
+   under-the-hood work (refactors, internal cleanups, dependency and tooling
+   churn, test-only edits) that has no user-visible effect.
+
+## Commit hygiene
+
+A feature may span several commits. Split work into logical, self-contained
+steps that build on each other, each commit compiling and standing on its own.
+
+- **Several commits are correct for one feature.** Slice the work so each commit
+  is a coherent step — a new endpoint plus its client wiring, a data layer plus
+  the query that uses it — and commit each slice as it lands. The git panel's
+  read-only log and branch browsing are the model: separate, layered, and
+  individually reviewable. Do not collapse a feature into one commit just
+  because it has one goal.
+- **Fold in the changes that are not a step.** Amend or fixup-squash a commit
+  when the new work revises course, rewrites what an earlier commit did, or is
+  too trivial to stand alone — a follow-up fix, a doc clarification, a small
+  correction. A history reading "feat: X" then "fix: small thing about X" is
+  noise; fold it so the history reads as if the change were made once, right.
+- The test: does this commit move the work forward as its own step, or does it
+  only revise a step already taken? Forward means a new commit; revision means
+  fold it in.
+- **Already-pushed history is fair game.** The user does not mind rewriting it.
+  If you amend or rebase a commit that is already on `origin`, re-sync the fork
+  with `git push --force-with-lease` when instructed to push; don't contort the
+  workflow to avoid a rewrite.
+- The goal is a clean, truthful history that reads as deliberate progress — not
+  a frozen one, and not one commit per feature by reflex.
 
 ## How to build
 
