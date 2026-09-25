@@ -87,7 +87,7 @@ never push them. Upstream updates are `git fetch` + rebase with our commits on t
 
    ```sh
    scripts/dev-pair.sh start   # UI http://dev.ai.btz/ (reverse proxy; local listener :8599), API :8598
-   scripts/dev-pair.sh stop    # only kills what this script started
+   scripts/dev-pair.sh stop    # stops the pair and reaps anything it orphaned
    ```
 
    The script runs the working tree directly (tsx watch + Vite dev server, no
@@ -98,8 +98,27 @@ never push them. Upstream updates are `git fetch` + rebase with our commits on t
    overriding — in this container the ambient `PI_WEB_*`/`PI_CODING_AGENT_DIR`
    values point at production, and a dev daemon resolving them would clobber
    the production socket. Never launch the pair with an inherited environment.
-   Overrides: `PI_WEB_DEV_ROOT`, `PI_WEB_DEV_UI_PORT`, `PI_WEB_DEV_API_PORT`.
+   Overrides: `PI_WEB_DEV_ROOT`, `PI_WEB_DEV_UI_PORT`, `PI_WEB_DEV_API_PORT`,
+   `PI_WEB_DEV_PLUGIN_SOURCE`.
    Logs: `$PI_WEB_DEV_ROOT/dev.log` (default `/tmp/pi-web-dev/dev.log`).
+   `start` re-links user plugins into `$PI_WEB_DEV_ROOT/data/plugins` on every
+   run, preferring the `../pi-web-plugins` checkout and falling back to the
+   running instance's plugins directory, so plugin edits are live on refresh and
+   a removed plugin disappears. Only entries the plugin catalog would accept are
+   linked (a directory, or a symlink to one, whose `package.json` declares
+   `piWeb`), and they are linked rather than copied so nothing goes stale.
+   `start` also refuses any dev root at, inside, or containing the production
+   data directory, and any dev socket equal to the ambient production socket:
+   those resolved paths would make the dev sessiond bind and unlink the
+   production socket. `stop` collects processes left behind by a hard kill,
+   crash, or container restart: each dev child leads its own process group, so
+   teardown cannot rely on the inner supervisors running their cleanup.
+   Selection stays conservative — a process must carry both dev-only env
+   markers *and* a dev entrypoint, and pid 1, the script, and its ancestors are
+   never signalled — so production is never killed even though it runs some of
+   the same entrypoints. `start` refuses to run while any dev-pair process
+   survives, because a second instance competing for the sessiond socket is what
+   breaks the dev UI.
 4. The user browses the Vite dev server on port 8599 (container IP + port;
    the IP changes on container recreate). The pair seeds its state from
    production on first start, so the usual projects appear; sessions run in
