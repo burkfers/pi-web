@@ -36,7 +36,9 @@ import "./FormattedText";
 import type { MarkdownWorkspaceContext } from "../formatting/workspaceLinks";
 import "./ToolExecutionView";
 
-const messageTimestampFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
+// h23 rather than hour12:false alone, so midnight renders as 00:xx in every
+// locale instead of the h24 "24:xx" some ICU builds resolve to.
+const messageTimestampFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium", hourCycle: "h23" });
 const notificationTimestampFormatter = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 
 function renderNotificationDisclosureIcon(collapsed: boolean) {
@@ -180,7 +182,7 @@ export function chatMessageMetadataLabel(message: ChatLine): string {
   return parts.length === 0 ? "No Pi message metadata available" : parts.join(" · ");
 }
 
-function formatMessageTimestamp(timestamp: string): string | undefined {
+export function formatMessageTimestamp(timestamp: string): string | undefined {
   const date = new Date(timestamp);
   if (!Number.isFinite(date.getTime())) return undefined;
   return messageTimestampFormatter.format(date);
