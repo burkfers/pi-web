@@ -3254,6 +3254,40 @@ export class PiSessionService implements SessionRouteService {
     return this.statusFromSession(session);
   }
 
+  /**
+   * Drop a single queued message, identified the way the browser renders it:
+   * by kind and text within the flat `queuedMessages` list. Returns the
+   * session status as it stands afterwards, unchanged when nothing matched —
+   * a message that drained between rendering and clicking is a normal race, not
+   * an error.
+   */
+  async removeQueuedMessage(ref: PiSessionRef, message: { kind: QueuedPromptKind; text: string }): Promise<ClientSessionStatus> {
+    await this.assertWritable(ref);
+    const session = await this.getOrOpen(ref);
+    this.removeOneQueuedMessage(session, message);
+    this.publishStatus(session);
+    return this.statusFromSession(session);
+  }
+
+  private removeOneQueuedMessage(session: PiAgentSession, message: { kind: QueuedPromptKind; text: string }): boolean {
+    const sessionQueue = queuedMessagesFromSession(session);
+    const index = [...sessionQueue, ...this.compactionQueuedMessages(session.sessionId)]
+      .findIndex((queued) => queued.kind === message.kind && queued.text === message.text);
+    if (index === -1) return false;
+    if (index < sessionQueue.length) {
+      removeFromSessionQueue(session, sessionQueue, index);
+      return true;
+    }
+    return this.removeCompactionQueuedMessage(session.sessionId, index - sessionQueue.length);
+  }
+
+  private removeCompactionQueuedMessage(sessionId: string, index: number): boolean {
+    const queue = this.compactionPromptQueues.get(sessionId);
+    const removed = queue?.splice(index, 1);
+    if (queue === undefined || queue.length === 0) this.compactionPromptQueues.delete(sessionId);
+    return removed !== undefined && removed.length > 0;
+  }
+
   async dismissWarning(ref: PiSessionRef, dismissId: string): Promise<ClientSessionStatus> {
     const session = await this.getOrOpen(ref);
     dismissSessionWarning(session, dismissId);
@@ -4968,6 +5002,48 @@ function queuedMessagesFromSession(session: PiAgentSession, extraQueuedMessages:
     ...session.getFollowUpMessages().map((text) => ({ kind: "followUp" as const, text })),
     ...extraQueuedMessages,
   ];
+}
+
+/**
+ * pi's queue-append primitives, resolved before the queue is cleared.
+ *
+ * pi exposes no per-message dequeue, so an individual removal is
+ * clear-and-restore: everything still queued has to be appended again, and
+ * `steer()`/`followUp()` would send it back through pi's input handlers and
+ * skill/prompt-template expansion a second time. `_queueSteer`/`_queueFollowUp`
+ * are the append those functions end at, so a survivor goes back byte-identical.
+ *
+ * They are read off the runtime object with `Reflect` because the SDK types them
+ * `private`, which is the same deliberate reach this repo already uses for
+ * third-party internals (see the websocket bridge's socket reader). A pi build
+ * that renamed or dropped them leaves the queue untouched and the removal
+ * refused, rather than silently re-processing every survivor.
+ */
+function queueMessageRequeuer(session: PiAgentSession): (message: { kind: QueuedPromptKind; text: string }) => void {
+  const appendSteer = queueAppender(Reflect.get(session, "_queueSteer"), session);
+  const appendFollowUp = queueAppender(Reflect.get(session, "_queueFollowUp"), session);
+  if (appendSteer === undefined || appendFollowUp === undefined) {
+    throw new Error("Removing a single queued message needs pi's queue API, which the installed pi build does not expose. Clear the queue instead, or upgrade pi once it exposes that API.");
+  }
+  return (message) => {
+    (message.kind === "steer" ? appendSteer : appendFollowUp)(message.text);
+  };
+}
+
+/** One of pi's queue-append internals, when the installed pi build still has it. */
+function queueAppender(value: unknown, session: PiAgentSession): ((text: string) => void) | undefined {
+  return typeof value === "function" ? (text) => { Reflect.apply(value, session, [text]); } : undefined;
+}
+
+function removeFromSessionQueue(session: PiAgentSession, queue: readonly { kind: QueuedPromptKind; text: string }[], index: number): void {
+  // Both halves of a clear-and-restore need a run in flight: a survivor
+  // appended to an idle session would be delivered as a fresh prompt instead of
+  // staying queued behind the current work.
+  if (!session.isStreaming) throw new Error("The session is no longer streaming, so its queued messages can only be cleared, not edited one at a time.");
+  const requeue = queueMessageRequeuer(session);
+  const survivors = queue.filter((_, survivorIndex) => survivorIndex !== index);
+  clearSessionQueue(session);
+  for (const survivor of survivors) requeue(survivor);
 }
 
 function userTextMessage(text: string): { role: "user"; content: string } {

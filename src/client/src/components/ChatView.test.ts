@@ -17,6 +17,7 @@ import {
   chatMessageGroupLabel,
   chatMessageMetadataLabel,
   chatQueuedMessageSections,
+  chatQueuedMessageShowsRemoveAction,
   chatQueuedSectionShowsClearAction,
   chatSessionWarningRows,
   formatMessageTimestamp,
@@ -81,6 +82,22 @@ describe("ChatView queued-message clear wiring", () => {
     templateEventHandlerNearMarker(renderQueuedMessages(view), "Clear queue")(new Event("click"));
 
     expect(onClearServerQueue).toHaveBeenCalledOnce();
+  });
+});
+
+describe("chatQueuedMessageShowsRemoveAction", () => {
+  // Whether a row offers the remove button is a content rule, so it lives in a
+  // pure exported seam rather than being scraped from rendered markup.
+  it("offers removal once a section holds more than one message", () => {
+    expect(chatQueuedMessageShowsRemoveAction(2, true)).toBe(true);
+  });
+
+  it("leaves a lone queued message to the section's Clear queue action", () => {
+    expect(chatQueuedMessageShowsRemoveAction(1, true)).toBe(false);
+  });
+
+  it("never offers removal when the action cannot land", () => {
+    expect(chatQueuedMessageShowsRemoveAction(3, false)).toBe(false);
   });
 });
 

@@ -1146,6 +1146,42 @@ describe("session routes", () => {
     }
   });
 
+  it("removes one queued message by the identity the browser renders it with", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, new SessionEventHub());
+
+    try {
+      const requestCwd = resolve("/repo");
+      const response = await routeApp.inject({ method: "POST", url: "/sessions/session-1/queue/remove", payload: { cwd: requestCwd, kind: "followUp", text: "second pass" } });
+
+      expect(response.statusCode).toBe(200);
+      expect(routeService.removeQueuedMessageCalls).toEqual([{ lookup: { id: "session-1", cwd: requestCwd }, message: { kind: "followUp", text: "second pass" } }]);
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
+  it("rejects a queued-message removal that does not name a known kind", async () => {
+    const routeApp = Fastify({ logger: false });
+    await routeApp.register(fastifyWebsocket);
+    const routeService = new CapturingRouteSessionService();
+    registerSessionRoutes(routeApp, routeService, new SessionEventHub());
+
+    try {
+      const response = await routeApp.inject({ method: "POST", url: "/sessions/session-1/queue/remove", payload: { cwd: resolve("/repo"), kind: "nextTurn", text: "second pass" } });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({ error: 'kind field must be "steer" or "followUp"' });
+      expect(routeService.removeQueuedMessageCalls).toEqual([]);
+    } finally {
+      await routeService.dispose();
+      await routeApp.close();
+    }
+  });
+
   it("dismisses a session warning with workspace context and returns fresh status", async () => {
     const routeApp = Fastify({ logger: false });
     await routeApp.register(fastifyWebsocket);
@@ -1343,6 +1379,7 @@ class CapturingRouteSessionService implements SessionRouteService {
   readonly renameCalls: { lookup: SessionRouteRef; name: string }[] = [];
   renameError: Error | undefined;
   readonly clearQueueCalls: SessionRouteRef[] = [];
+  readonly removeQueuedMessageCalls: { lookup: SessionRouteRef; message: { kind: "steer" | "followUp"; text: string } }[] = [];
   readonly dismissWarningCalls: { lookup: SessionRouteRef; dismissId: string }[] = [];
   readonly notificationInboxCalls: SessionRef[] = [];
   readonly acknowledgeUnreadCalls: { sessionId: string; request: SessionUnreadAcknowledgeRequest }[] = [];
@@ -1488,6 +1525,20 @@ class CapturingRouteSessionService implements SessionRouteService {
   clearQueue(lookup: SessionRouteRef): Promise<SessionStatus> {
     this.clearQueueCalls.push(lookup);
     if (this.clearQueueError !== undefined) return Promise.reject(this.clearQueueError);
+    return Promise.resolve({
+      sessionId: lookup.id,
+      isStreaming: true,
+      isCompacting: false,
+      isBashRunning: false,
+      pendingMessageCount: 0,
+      queuedMessages: [],
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      cost: 0,
+    });
+  }
+
+  removeQueuedMessage(lookup: SessionRouteRef, message: { kind: "steer" | "followUp"; text: string }): Promise<SessionStatus> {
+    this.removeQueuedMessageCalls.push({ lookup, message });
     return Promise.resolve({
       sessionId: lookup.id,
       isStreaming: true,

@@ -30,6 +30,17 @@ interface AttachmentsRequestBody {
   folder?: unknown;
 }
 
+/**
+ * The identity a queued message is rendered with, and therefore the one a
+ * removal addresses it by. Deliberately unbounded like the prompt text it
+ * echoes: anything that could be queued has to be removable.
+ */
+function queuedMessageFromBody(body: Record<string, unknown>): { kind: "steer" | "followUp"; text: string } {
+  const kind = requireString(body, "kind");
+  if (kind !== "steer" && kind !== "followUp") throw new Error('kind field must be "steer" or "followUp"');
+  return { kind, text: requireString(body, "text") };
+}
+
 const MAX_NOTIFICATION_SESSION_ID_LENGTH = 512;
 const MAX_NOTIFICATION_CWD_LENGTH = 32 * 1024;
 const MAX_NOTIFICATION_DAEMON_ID_LENGTH = 512;
@@ -343,6 +354,15 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
   app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/queue/clear`, async (request, reply) => {
     try {
       return await sessions.clearQueue(sessionRefFromBody(request.params.sessionId, optionalRecord(request.body)));
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown; kind?: unknown; text?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/queue/remove`, async (request, reply) => {
+    try {
+      const body = optionalRecord(request.body);
+      return await sessions.removeQueuedMessage(sessionRefFromBody(request.params.sessionId, body), queuedMessageFromBody(body));
     } catch (error) {
       return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
     }

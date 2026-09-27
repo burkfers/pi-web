@@ -7,7 +7,8 @@ import { LitElement, html, type PropertyValues } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { api, DEFAULT_WORKSPACE_ATTACHMENTS_FOLDER, type FileSuggestion, type PromptAttachment, type SessionModel, type SessionStatus, type SlashCommand } from "../api";
 import type { PromptAttachmentDelivery } from "../../../shared/apiTypes";
-import { capturePromptAttachments, effectivePromptAttachmentDelivery, isInlinePromptAttachment, promptAttachmentsCanUseInlineDelivery } from "../promptAttachmentCapture";
+import { capturePromptAttachments, effectivePromptAttachmentDelivery, isInlinePromptAttachment, promptAttachmentsCanUseInlineDelivery, type CapturedAttachment } from "../promptAttachmentCapture";
+import { base64ByteLength } from "../../../shared/promptAttachments";
 import { inputModeForDraft, inputModesEqual, type InputMode } from "../inputModes";
 import { machineSessionKey } from "../machineKeys";
 import { detectPromptCompletionTrigger, fileCompletionInsertText, modelCompletionChoices, type PromptCompletionTrigger } from "../promptCompletions";
@@ -165,6 +166,20 @@ export class PromptEditor extends LitElement {
     this.currentInputMode = inputModeForDraft(text);
     this.completions = [];
     this.selectedIndex = 0;
+  }
+
+  /**
+   * Put a queued message back into the composer as the new draft, attachments
+   * included: a message that was sent with files and then returned to the editor
+   * must not lose them. It replaces the composer outright, so a message queued
+   * without files does not inherit whatever was staged for a different one.
+   */
+  restoreQueuedSend(text: string, attachments?: readonly PromptAttachment[]): void {
+    this.replaceText(text);
+    this.attachmentSeq = 0;
+    this.attachments = (attachments ?? []).map((attachment) => ({ id: `attachment-${String(++this.attachmentSeq)}`, ...toCapturedAttachment(attachment) }));
+    const key = draftStorageKey(this.machineId, this.sessionId);
+    if (key !== undefined) saveStagedAttachments(key, this.attachments);
   }
 
   /** Get the underlying CM6 EditorView, or undefined if not yet mounted. */
@@ -580,6 +595,12 @@ function pendingToPromptAttachment(attachment: PendingAttachment): PromptAttachm
     return { kind: "image", mimeType: attachment.mimeType, data: attachment.data, name: attachment.name };
   }
   return { kind: "file", mimeType: attachment.mimeType, data: attachment.data, name: attachment.name };
+}
+
+/** The staged-attachment shape the composer holds, rebuilt from a wire attachment. */
+function toCapturedAttachment(attachment: PromptAttachment): CapturedAttachment {
+  const name = attachment.name ?? (attachment.kind === "image" ? "image" : "attachment");
+  return { kind: attachment.kind, name, mimeType: attachment.mimeType, data: attachment.data, size: base64ByteLength(attachment.data) };
 }
 
 export function attachmentFolderDeliveryLabel(folder: string): string {

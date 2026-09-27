@@ -58,6 +58,28 @@ function renderNotificationCloseIcon() {
   `;
 }
 
+function renderQueuedEditIcon() {
+  return html`
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4 20h4L19 9l-4-4L4 16v4z"></path>
+      <path d="M14 6l4 4"></path>
+    </svg>
+  `;
+}
+
+function renderQueuedRemoveIcon() {
+  return html`
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M6 6l12 12"></path>
+      <path d="M18 6 6 18"></path>
+    </svg>
+  `;
+}
+
+function queuedMessageKindLabel(kind: QueuedSessionMessage["kind"], index: number): string {
+  return `${kind === "steer" ? "Steer" : "Follow-up"} ${String(index + 1)}`;
+}
+
 function isSessionNotificationTarget(value: unknown): value is SessionNotificationTarget {
   return typeof value === "object"
     && value !== null
@@ -152,6 +174,24 @@ export function chatQueuedSectionShowsClearAction(section: QueuedMessageSection,
   return section.source === "server" && hasClearHandler;
 }
 
+/**
+ * Whether one queued-message row offers the remove action. A section holding a
+ * single message keeps the header's Clear queue action, which already empties
+ * it; a second button for the same one message is noise.
+ */
+export function chatQueuedMessageShowsRemoveAction(messageCount: number, canRemove: boolean): boolean {
+  return canRemove && messageCount > 1;
+}
+
+/** A queued message the user acted on, addressed the way the view renders it. */
+export interface QueuedMessageAction {
+  action: "edit" | "remove";
+  source: QueuedMessageSection["source"];
+  /** Position within its section, so a client-queued send can be withdrawn. */
+  index: number;
+  message: QueuedSessionMessage;
+}
+
 /** A rendered session-warning row derived from live status warnings. */
 export interface ChatSessionWarningRow {
   severity: SessionWarningSeverity;
@@ -216,6 +256,8 @@ export class ChatView extends LitElement {
   @property({ type: Boolean }) isCompacting = false;
   @property({ type: Number }) pendingMessageCount = 0;
   @property({ attribute: false }) clientQueuedMessages: QueuedSessionMessage[] = [];
+  /** Whether client-queued sends can still be withdrawn, i.e. the start is still pending. */
+  @property({ type: Boolean }) clientQueueEditable = false;
   @property({ attribute: false }) status?: SessionStatus;
   @property({ attribute: false }) activity?: SessionActivity;
   @property({ attribute: false }) pendingAsk?: PendingAskUser;
@@ -228,6 +270,7 @@ export class ChatView extends LitElement {
   @property({ attribute: false }) onDismissClosedDialog?: ExtensionDialogDismissCallback;
   @property({ attribute: false }) notificationInbox?: SelectedSessionNotificationView;
   @property({ attribute: false }) onClearServerQueue?: () => void;
+  @property({ attribute: false }) onQueuedMessageAction?: (action: QueuedMessageAction) => void;
   @property({ attribute: false }) onDismissWarning?: (dismissId: string) => void;
   @property({ attribute: false }) onDismissNotification?: (notificationId: string) => void;
   @property({ attribute: false }) onDismissAllNotifications?: () => void;
@@ -753,6 +796,7 @@ export class ChatView extends LitElement {
 
   private renderQueuedMessageList(section: QueuedMessageSection) {
     const canClear = chatQueuedSectionShowsClearAction(section, this.onClearServerQueue !== undefined);
+    const canAct = this.onQueuedMessageAction !== undefined;
     return html`
       <aside class="queued-messages" aria-live="polite">
         <div class="queued-header">
@@ -764,14 +808,43 @@ export class ChatView extends LitElement {
             <button type="button" class="queued-clear-button" title="Clear queued messages without stopping active work" @click=${this.handleClearServerQueue}>Clear queue</button>
           ` : null}
         </div>
-        ${section.messages.map((message, index) => html`
-          <div class="queued-message">
-            <span class="queued-kind">${message.kind === "steer" ? "Steer" : "Follow-up"} ${String(index + 1)}</span>
-            <formatted-text .intentKey=${JSON.stringify([this.machineId, this.sessionId, "queue", section.source, index, message.kind])} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${message.text}></formatted-text>
-          </div>
-        `)}
+        ${section.messages.map((message, index) => this.renderQueuedMessage(section, message, index, canAct))}
       </aside>
     `;
+  }
+
+  private renderQueuedMessage(section: QueuedMessageSection, message: QueuedSessionMessage, index: number, canAct: boolean) {
+    // A client-queued send is ours until the pending start resolves; after that
+    // the entries are being delivered, so offer no action that cannot land.
+    const canEdit = canAct && (section.source === "server" || this.clientQueueEditable);
+    const canRemove = chatQueuedMessageShowsRemoveAction(section.messages.length, canEdit);
+    if (!canEdit) {
+      return html`
+        <div class="queued-message">
+          <span class="queued-kind">${queuedMessageKindLabel(message.kind, index)}</span>
+          ${this.renderQueuedMessageText(section, message, index)}
+        </div>
+      `;
+    }
+    const label = queuedMessageKindLabel(message.kind, index);
+    return html`
+      <div class="queued-message">
+        <div class="queued-message-head">
+          <span class="queued-kind">${label}</span>
+          <div class="queued-message-actions">
+            <button type="button" class="queued-message-action" title=${`Return ${label} to the editor`} aria-label=${`Return ${label} to the editor`} @click=${() => { this.onQueuedMessageAction?.({ action: "edit", source: section.source, index, message }); }}>${renderQueuedEditIcon()}</button>
+            ${canRemove ? html`
+              <button type="button" class="queued-message-action" title=${`Remove ${label}`} aria-label=${`Remove ${label}`} @click=${() => { this.onQueuedMessageAction?.({ action: "remove", source: section.source, index, message }); }}>${renderQueuedRemoveIcon()}</button>
+            ` : null}
+          </div>
+        </div>
+        ${this.renderQueuedMessageText(section, message, index)}
+      </div>
+    `;
+  }
+
+  private renderQueuedMessageText(section: QueuedMessageSection, message: QueuedSessionMessage, index: number) {
+    return html`<formatted-text .intentKey=${JSON.stringify([this.machineId, this.sessionId, "queue", section.source, index, message.kind])} .contentRendering=${this.contentRendering} .machineId=${this.machineId} .workspaceContext=${this.workspaceContext} .text=${message.text}></formatted-text>`;
   }
 
   private renderOpenAsk() {

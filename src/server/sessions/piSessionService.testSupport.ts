@@ -46,6 +46,51 @@ export interface TestSession extends PiAgentSession {
   pendingMessageCount: number;
   getSteeringMessages: () => readonly string[];
   getFollowUpMessages: () => readonly string[];
+  /** pi's queue-append internals, absent from `omitsQueueApi` fakes. */
+  _queueSteer?: (text: string) => void;
+  _queueFollowUp?: (text: string) => void;
+}
+
+export interface FakeQueuedRuntimeOptions {
+  steering?: string[];
+  followUp?: string[];
+  isStreaming?: boolean;
+  isCompacting?: boolean;
+  /** Model a pi build whose queue-append internals are no longer reachable. */
+  omitsQueueApi?: boolean;
+}
+
+/**
+ * A fake session whose queue really mutates, carrying the pi queue-append
+ * internals an individual queued-message removal re-queues survivors through.
+ * `appends` records what went back in, so a test can assert the survivors were
+ * re-queued in order and through the internals rather than `steer`/`followUp`.
+ */
+export function fakeQueuedRuntime(sessionId: string, options: FakeQueuedRuntimeOptions = {}) {
+  const queue = { steering: [...(options.steering ?? [])], followUp: [...(options.followUp ?? [])] };
+  const appends: { kind: "steer" | "followUp"; text: string }[] = [];
+  const append = (kind: "steer" | "followUp") => (text: string): void => {
+    if (kind === "steer") queue.steering.push(text);
+    else queue.followUp.push(text);
+    appends.push({ kind, text });
+  };
+  const fake = fakeRuntime(sessionId, {
+    isStreaming: options.isStreaming ?? true,
+    isCompacting: options.isCompacting ?? false,
+    getSteeringMessages: () => queue.steering,
+    getFollowUpMessages: () => queue.followUp,
+    clearQueue: () => {
+      const cleared = { steering: [...queue.steering], followUp: [...queue.followUp] };
+      queue.steering.length = 0;
+      queue.followUp.length = 0;
+      return cleared;
+    },
+    ...(options.omitsQueueApi === true ? {} : { _queueSteer: append("steer"), _queueFollowUp: append("followUp") }),
+  });
+  // Installed after construction: an object spread would have copied the count
+  // the patch held at build time, and it has to follow the queue as it drains.
+  Object.defineProperty(fake.session, "pendingMessageCount", { get: () => queue.steering.length + queue.followUp.length, configurable: true });
+  return { ...fake, queue, appends };
 }
 
 export function fakeSessionManager(cwd = "/workspace", patch: Partial<PiSessionManager> = {}): PiSessionManager {

@@ -16,7 +16,7 @@ import { MachineController } from "../controllers/machineController";
 import { MachineStatusController } from "../controllers/machineStatusController";
 import { ProjectController, type ProjectTrustChoice } from "../controllers/projectController";
 import { PiWebStatusController } from "../controllers/piWebStatusController";
-import { SessionController } from "../controllers/sessionController";
+import { SessionController, isClientPendingStartSessionInfo, type TakenClientQueuedSend } from "../controllers/sessionController";
 import { SessionNotificationController } from "../controllers/sessionNotificationController";
 import { WorkspaceController } from "../controllers/workspaceController";
 import { emptyMachineNavigationSnapshot, machineNavigationSnapshotFromState, routeFromMachineNavigationSnapshot, SessionStorageMachineNavigationMemory, type MachineNavigationSnapshot, type WorkspaceRouteSurface } from "../controllers/machineNavigationMemory";
@@ -65,7 +65,7 @@ import { unreadSessionCount } from "./SessionList";
 import "./SessionCleanupDialog";
 import "./SessionTreeNavigator";
 import "./ChatView";
-import type { ChatView } from "./ChatView";
+import type { ChatView, QueuedMessageAction } from "./ChatView";
 import "./PromptEditor";
 import type { PromptEditor } from "./PromptEditor";
 import "./StatusBar";
@@ -3297,6 +3297,39 @@ export class PiWebApp extends LitElement {
     void this.sessions.clearServerQueue();
   };
 
+  /**
+   * Act on one queued message: return it to the composer, or drop it. Both
+   * sources resolve to the same outcome — the message leaves the queue and, for
+   * "edit", its text lands in the composer.
+   */
+  private readonly handleQueuedMessageAction = (action: QueuedMessageAction): void => {
+    if (action.source === "client") {
+      const taken = this.sessions.takeClientQueuedMessage(action.index);
+      if (action.action === "edit" && taken !== undefined) this.restoreQueuedSendToComposer(taken);
+      return;
+    }
+    void this.handleServerQueuedMessageAction(action);
+  };
+
+  private async handleServerQueuedMessageAction(action: QueuedMessageAction): Promise<void> {
+    if (!await this.sessions.removeServerQueuedMessage(action.message)) return;
+    if (action.action === "edit") this.restoreQueuedSendToComposer({ text: action.message.text });
+  }
+
+  private restoreQueuedSendToComposer(send: TakenClientQueuedSend): void {
+    this.promptEditor?.restoreQueuedSend(send.text, send.attachments);
+    this.promptEditor?.focusInput();
+  }
+
+  /**
+   * Client-queued sends are withdrawable only while their start is still
+   * pending. Once the session is ready the queue is flushed into real sends,
+   * so the view offers no action that could not land.
+   */
+  private isClientPendingStartSelected(state: AppState): boolean {
+    return isClientPendingStartSessionInfo(state.selectedSession);
+  }
+
   private readonly handleDismissWarning = (dismissId: string): void => {
     void this.sessions.dismissWarning(dismissId);
   };
@@ -3398,7 +3431,7 @@ export class PiWebApp extends LitElement {
       this.notificationView = selectedNotificationView(state.selectedNotificationInbox);
     }
     return html`
-      <chat-view .contentRendering=${this.plugins.chatContentRendering} .machineId=${selectedMachineId(state)} @workspace-file-open=${this.handleWorkspaceFileOpen} .workspaceContext=${markdownWorkspaceContext(selectedMachineId(state), state.selectedWorkspace, session)} .sessionId=${session.id} .onMessageAction=${this.handleMessageAction} .messageActionsDisabled=${session.archived === true || state.sendingPrompts[session.id] === true || isSessionActive(state.status, state.activity)} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? this.emptyClientQueue} .status=${state.status} .activity=${state.activity} .pendingAsk=${state.pendingAsk} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${this.handleSubmitAsk} .notificationInbox=${this.notificationView} .onClearServerQueue=${this.handleClearServerQueue} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${this.handleLoadEarlierMessages} .eventGroupsExpandedByDefault=${this.eventGroupsExpandedByDefault} .thinkingPartsExpandedByDefault=${this.thinkingPartsExpandedByDefault}></chat-view>
+      <chat-view .contentRendering=${this.plugins.chatContentRendering} .machineId=${selectedMachineId(state)} @workspace-file-open=${this.handleWorkspaceFileOpen} .workspaceContext=${markdownWorkspaceContext(selectedMachineId(state), state.selectedWorkspace, session)} .sessionId=${session.id} .onMessageAction=${this.handleMessageAction} .messageActionsDisabled=${session.archived === true || state.sendingPrompts[session.id] === true || isSessionActive(state.status, state.activity)} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? this.emptyClientQueue} .status=${state.status} .activity=${state.activity} .pendingAsk=${state.pendingAsk} .pendingDialogs=${state.pendingDialogs} .closedDialogs=${state.closedDialogs} .onAnswerDialog=${this.handleAnswerDialog} .onCancelDialog=${this.handleCancelDialog} .onDismissClosedDialog=${this.handleDismissClosedDialog} .askDraftSessionId=${machineSessionKey(selectedMachineId(state), session.id)} .onSubmitAsk=${this.handleSubmitAsk} .notificationInbox=${this.notificationView} .clientQueueEditable=${this.isClientPendingStartSelected(state)} .onClearServerQueue=${this.handleClearServerQueue} .onQueuedMessageAction=${this.handleQueuedMessageAction} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .warningsVisible=${!this.sessionWarningVisibility.collapsed} .onToggleWarnings=${this.handleToggleWarnings} .onLoadMore=${this.handleLoadEarlierMessages} .eventGroupsExpandedByDefault=${this.eventGroupsExpandedByDefault} .thinkingPartsExpandedByDefault=${this.thinkingPartsExpandedByDefault}></chat-view>
     `;
   }
 

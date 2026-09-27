@@ -84,6 +84,17 @@ type QueuedPendingSessionSendInput =
 
 type QueuedPendingSessionSend = QueuedPendingSessionSendInput & { id: string };
 
+/**
+ * A client-queued send taken back out of the queue, carrying what the composer
+ * needs to restore it: the prompt text plus any attachments that were staged
+ * with it, so returning a queued message to the editor does not drop the files
+ * the user attached.
+ */
+export interface TakenClientQueuedSend {
+  text: string;
+  attachments?: PromptAttachment[] | undefined;
+}
+
 interface PendingSessionStart {
   tempId: string;
   originWorkspace: Workspace;
@@ -1164,6 +1175,64 @@ export class SessionController {
     } catch (error) {
       this.reportSessionError(session, machineId, error, errorOwner);
     }
+  }
+
+  /**
+   * Drop one server-queued message, addressed by the kind/text identity the
+   * chat view renders it with. Resolves to whether the server confirmed the
+   * removal, so a caller restoring the text to the composer only does so when
+   * the message really left the queue.
+   */
+  async removeServerQueuedMessage(message: QueuedSessionMessage): Promise<boolean> {
+    const state = this.getState();
+    const session = state.selectedSession;
+    if (session === undefined || session.archived === true || isClientPendingStartSessionInfo(session)) return false;
+    const machineId = selectedMachineId(state);
+    const errorOwner = this.captureSessionErrorOwner(session);
+    const selectionSeq = this.selectionSeq;
+    try {
+      const status = await this.api.removeQueuedMessage(session, message, machineId);
+      if (!this.isCurrentSessionSelection(session.id, machineId, selectionSeq)) return false;
+      // A message that drained on its own between rendering and the click is a
+      // no-op removal: the queue is already in the state the removal wanted, so
+      // the returned text can go back to the composer.
+      this.applyStatus(status);
+      return !status.queuedMessages.some((queued) => queued.kind === message.kind && queued.text === message.text);
+    } catch (error) {
+      this.reportSessionError(session, machineId, error, errorOwner);
+      return false;
+    }
+  }
+
+  /**
+   * Take one client-queued send back out of the pending-start queue, returning
+   * what the composer needs to restore it.
+   *
+   * `index` addresses the same preview the chat view rendered, so the two lists
+   * have to stay in lockstep: every append and every removal updates both.
+   * Available only while the start is still pending — once the session is ready
+   * the queue is flushed into real sends and its entries are no longer ours to
+   * withdraw.
+   */
+  takeClientQueuedMessage(index: number): TakenClientQueuedSend | undefined {
+    const state = this.getState();
+    const session = state.selectedSession;
+    if (session === undefined || !isClientPendingStartSessionInfo(session)) return undefined;
+    const pending = this.pendingSessionStarts.get(session.id);
+    const queued = pending?.queuedSends[index];
+    if (pending === undefined || queued === undefined) return undefined;
+    const remaining = pending.queuedSends.filter((_, queuedIndex) => queuedIndex !== index);
+    pending.queuedSends = remaining;
+    this.removeClientQueuedMessageAt(session.id, index);
+    return queued.type === "prompt" ? { text: queued.text, attachments: queued.attachments } : { text: queued.text };
+  }
+
+  private removeClientQueuedMessageAt(sessionId: string, index: number): void {
+    const state = this.getState();
+    const current = state.clientQueuedSessionMessages[sessionId] ?? [];
+    if (index >= current.length) return;
+    const remaining = current.filter((_, queuedIndex) => queuedIndex !== index);
+    this.setState({ clientQueuedSessionMessages: remaining.length === 0 ? omitKey(state.clientQueuedSessionMessages, sessionId) : { ...state.clientQueuedSessionMessages, [sessionId]: remaining } });
   }
 
   async clearServerQueue() {
@@ -2259,7 +2328,7 @@ function navigationIsCurrent(navigation: NavigationFreshness | undefined): boole
   return navigation === undefined || navigation.isCurrent();
 }
 
-function isClientPendingStartSessionInfo(session: SessionInfo | undefined): session is ClientPendingStartSessionInfo {
+export function isClientPendingStartSessionInfo(session: SessionInfo | undefined): session is ClientPendingStartSessionInfo {
   return session !== undefined && "clientPendingStart" in session && session.clientPendingStart === true;
 }
 

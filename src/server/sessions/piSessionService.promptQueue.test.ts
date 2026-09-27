@@ -6,7 +6,7 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiSessionService } from "./piSessionService.js";
-import { CapturingSessionEventHub, createTestModelRuntime, fakeRuntime, runtimeCreator, seedCredential, sessionGateway, sessionRecord, sessionRef, TEST_MODEL_ID, TEST_MODEL_PROVIDER, testModel, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
+import { CapturingSessionEventHub, createTestModelRuntime, fakeQueuedRuntime, fakeRuntime, runtimeCreator, seedCredential, sessionGateway, sessionRecord, sessionRef, TEST_MODEL_ID, TEST_MODEL_PROVIDER, testModel, testModelRuntime, type RuntimeCreator } from "./piSessionService.testSupport.js";
 
 const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
 
@@ -305,6 +305,120 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
     expect(fake.calls.dispose).toBe(0);
     const publishedStatuses = hub.sessionEvents.filter(({ event }) => event.type === "status.update");
     expect(publishedStatuses.at(-1)?.event).toEqual({ type: "status.update", status });
+    await service.dispose();
+  });
+
+  it("removes one queued message and re-queues the survivors through pi's queue API", async () => {
+    const fake = fakeQueuedRuntime("remove-queue-session", { steering: ["adjust this turn"], followUp: ["then do this", "and finally this"] });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("remove-queue-session")]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const status = await service.removeQueuedMessage(sessionRef("remove-queue-session"), { kind: "followUp", text: "then do this" });
+
+    expect(status).toMatchObject({
+      pendingMessageCount: 2,
+      queuedMessages: [
+        { kind: "steer", text: "adjust this turn" },
+        { kind: "followUp", text: "and finally this" },
+      ],
+    });
+    // Survivors go back in through pi's queue-append primitives, so nothing is
+    // re-run through input handlers or expansion on the way.
+    expect(fake.appends).toEqual([{ kind: "steer", text: "adjust this turn" }, { kind: "followUp", text: "and finally this" }]);
+    expect(fake.calls.prompt).toEqual([]);
+    expect(fake.calls.abort).toBe(0);
+    await service.dispose();
+  });
+
+  it("removes the last remaining queued message without re-queueing anything", async () => {
+    const fake = fakeQueuedRuntime("remove-last-queue-session", { followUp: ["only one"] });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("remove-last-queue-session")]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const status = await service.removeQueuedMessage(sessionRef("remove-last-queue-session"), { kind: "followUp", text: "only one" });
+
+    expect(status).toMatchObject({ pendingMessageCount: 0, queuedMessages: [] });
+    expect(fake.appends).toEqual([]);
+    await service.dispose();
+  });
+
+  it("removes a prompt queued during compaction without disturbing the runtime queue", async () => {
+    const fake = fakeQueuedRuntime("remove-compaction-session", { followUp: ["queued after compaction started"], isCompacting: true });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("remove-compaction-session")]),
+      heartbeatIntervalMs: 60_000,
+    });
+    await service.prompt(sessionRef("remove-compaction-session"), "queued during compaction", "followUp");
+
+    const status = await service.removeQueuedMessage(sessionRef("remove-compaction-session"), { kind: "followUp", text: "queued during compaction" });
+
+    expect(status).toMatchObject({ queuedMessages: [{ kind: "followUp", text: "queued after compaction started" }] });
+    expect(fake.calls.clearQueue).toBe(0);
+    expect(fake.appends).toEqual([]);
+    await service.dispose();
+  });
+
+  it("ignores a removal for a queued message that already drained", async () => {
+    const fake = fakeQueuedRuntime("drained-queue-session", { followUp: ["still queued"] });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("drained-queue-session")]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const status = await service.removeQueuedMessage(sessionRef("drained-queue-session"), { kind: "followUp", text: "already delivered" });
+
+    expect(status).toMatchObject({ queuedMessages: [{ kind: "followUp", text: "still queued" }] });
+    expect(fake.calls.clearQueue).toBe(0);
+    await service.dispose();
+  });
+
+  it("refuses a queued-message removal when pi does not expose its queue API, leaving the queue intact", async () => {
+    const fake = fakeQueuedRuntime("no-queue-api-session", { followUp: ["first", "second"], omitsQueueApi: true });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("no-queue-api-session")]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await expect(service.removeQueuedMessage(sessionRef("no-queue-api-session"), { kind: "followUp", text: "first" }))
+      .rejects.toThrow("Removing a single queued message needs pi's queue API, which the installed pi build does not expose.");
+    expect(fake.calls.clearQueue).toBe(0);
+    expect(fake.queue.followUp).toEqual(["first", "second"]);
+    await service.dispose();
+  });
+
+  it("refuses a queued-message removal once the session is no longer streaming", async () => {
+    const fake = fakeQueuedRuntime("idle-queue-session", { followUp: ["stranded"], isStreaming: false });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("idle-queue-session")]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await expect(service.removeQueuedMessage(sessionRef("idle-queue-session"), { kind: "followUp", text: "stranded" }))
+      .rejects.toThrow("The session is no longer streaming");
+    expect(fake.calls.clearQueue).toBe(0);
+    expect(fake.queue.followUp).toEqual(["stranded"]);
     await service.dispose();
   });
 

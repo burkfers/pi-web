@@ -431,6 +431,11 @@ export const chatStyles = css`
   .queued-clear-button:hover, .queued-clear-button:focus { border-color: var(--pi-warning); color: var(--pi-text-bright); }
   .queued-message { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--pi-border); }
   .queued-message:first-of-type { padding-top: 0; border-top: 0; }
+  .queued-message-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .queued-message-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+  .queued-message-action { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--pi-muted); cursor: pointer; }
+  .queued-message-action:hover, .queued-message-action:focus { background: var(--pi-surface); color: var(--pi-text-bright); }
+  .queued-message-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .queued-kind { color: var(--pi-muted); font-size: 12px; text-transform: uppercase; }
   .queued-dialogs { margin: -8px 0 var(--pi-msg-gap, 14px); padding: 0 4px; color: var(--pi-muted); font-size: 12px; text-align: center; }
   .session-activity { max-width: 100%; min-width: 0; box-sizing: border-box; display: grid; gap: 4px; margin: 0 0 var(--pi-msg-gap, 14px); padding: var(--pi-msg-pad, 12px); border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); color: var(--pi-text); overflow: hidden; }
@@ -502,6 +507,7 @@ export const chatStyles = css`
     .session-warning-dismiss::after { content: ""; position: absolute; inset: -6px; }
     .image-zoom-close::after { content: ""; position: absolute; inset: -3px; }
     .history-load-button, .queued-clear-button { min-height: var(--pi-touch-target-min, 34px); }
+    .queued-message-action { width: var(--pi-touch-target-min, 34px); height: var(--pi-touch-target-min, 34px); }
   }
   @keyframes pulse { 0%, 100% { transform: scale(.75); opacity: .55; } 50% { transform: scale(1.2); opacity: 1; } }
 `;
