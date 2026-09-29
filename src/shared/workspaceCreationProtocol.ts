@@ -2,6 +2,8 @@
 export const WORKSPACE_CREATION_REQUEST_BODY_MAX_BYTES = 4 * 1024;
 /** One sessiond-owned deadline across owner resolution, validation, and planning. */
 export const WORKSPACE_CREATION_OPERATION_TIMEOUT_MS = 25_000;
+/** Leaves time for cancellation to reach remote web/sessiond before gateway timeout. */
+export const WORKSPACE_CREATION_FEDERATION_TIMEOUT_MS = 30_000;
 export const WORKSPACE_CREATION_PRECONDITION_MAX_LENGTH = 256;
 export const WORKSPACE_CREATION_NAME_MAX_LENGTH = 128;
 export const WORKSPACE_CREATION_BASE_REF_MAX_LENGTH = 255;

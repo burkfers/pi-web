@@ -5,7 +5,9 @@ import {
   PLUGIN_BACKEND_REQUEST_BODY_MAX_BYTES,
   PLUGIN_BACKEND_RESPONSE_BODY_MAX_BYTES,
 } from "./pluginBackendProtocol.js";
+import { WORKSPACE_CREATION_FEDERATION_TIMEOUT_MS } from "./workspaceCreationProtocol.js";
 import { WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS } from "./workspaceRemovalProtocol.js";
+import { WORKSPACE_CREATION_REQUEST_BODY_MAX_BYTES } from "./workspaceCreationProtocol.js";
 import { MAX_INLINE_PREVIEW_BYTES } from "./workspaceFiles.js";
 
 export { PLUGIN_BACKEND_FEDERATION_TIMEOUT_MS } from "./pluginBackendProtocol.js";
@@ -64,6 +66,20 @@ export const FEDERATED_HTTP_ROUTES = [
     method: "DELETE",
     path: "/projects/:projectId/workspaces/:workspaceId",
     timeoutMs: WORKSPACE_REMOVAL_FEDERATION_TIMEOUT_MS,
+    propagateCancellation: true,
+  },
+  {
+    method: "POST",
+    path: "/projects/:projectId/workspace-creations/preview",
+    timeoutMs: WORKSPACE_CREATION_FEDERATION_TIMEOUT_MS,
+    bodyLimit: WORKSPACE_CREATION_REQUEST_BODY_MAX_BYTES,
+    propagateCancellation: true,
+  },
+  {
+    method: "POST",
+    path: "/projects/:projectId/workspace-creations",
+    timeoutMs: WORKSPACE_CREATION_FEDERATION_TIMEOUT_MS,
+    bodyLimit: WORKSPACE_CREATION_REQUEST_BODY_MAX_BYTES,
     propagateCancellation: true,
   },
   {

@@ -18,6 +18,7 @@ import { registerSessionProxyRoutes, type SessionProxyDaemon } from "./sessiond/
 import { registerWorkspaceExplorerRoutes } from "./workspaceExplorerRoutes.js";
 import { registerProjectTrustRoutes } from "./projectTrustRoutes.js";
 import { registerWorkspaceDeletionRoutes } from "./workspaces/workspaceDeletionRoutes.js";
+import { registerWorkspaceCreationRoutes } from "./workspaces/workspaceCreationRoutes.js";
 import { createFilePiWebConfigService, registerConfigRoutes, registerLocalMachineConfigRoutes, type PiWebConfigService } from "./configRoutes.js";
 import { PiWebPluginManifestRuntimeError, PiWebPluginService } from "./piWebPluginService.js";
 import { createActiveProfilePiPackageService, type PiPackageService } from "./piPackageService.js";
@@ -247,6 +248,8 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerProjectTrustRoutes(app, projects, workspaces, projectTrustDeps, "/api/machines/local");
   registerWorkspaceDeletionRoutes(app, sessionDaemon);
   registerWorkspaceDeletionRoutes(app, sessionDaemon, "/api/machines/local");
+  registerWorkspaceCreationRoutes(app, sessionDaemon);
+  registerWorkspaceCreationRoutes(app, sessionDaemon, "/api/machines/local");
 
   registerMachineProxyRoutes(app, machines);
 

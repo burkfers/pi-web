@@ -1,6 +1,6 @@
 import { parseSessionDefaults } from "../../../shared/sessionDefaults";
 import type { SessionDefaultsUpdate } from "../../../shared/apiTypes";
-import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiSettingsUpdate, PiWebConfigValues, PromptAttachment, QueuedSessionMessage, ServerNoticeDismissRequest, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
+import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiSettingsUpdate, PiWebConfigValues, PromptAttachment, QueuedSessionMessage, ServerNoticeDismissRequest, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, WorkspaceCreationRequest, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
 import { resolveAppUrl } from "../appUrl";
 import { request } from "./http";
 import {
@@ -56,6 +56,7 @@ import {
   parseStopped,
   parseThinkingLevelsResponse,
   parseWriteWorkspaceFileResponse,
+  parseWorkspaceCreationPreview,
   parseWorkspaceProviderResolution,
   parseWorkspaceTrustResponse,
   requireMachineStatusSnapshot,
@@ -185,6 +186,20 @@ export const workspacesApi = {
   workspaces: async (projectId: string, machineId = "local", options?: { signal?: AbortSignal }) => [
     ...(await workspaceResolution(projectId, machineId, options)).workspaces,
   ],
+  previewWorkspaceCreation: (projectId: string, body: WorkspaceCreationRequest, machineId = "local", options?: { signal?: AbortSignal }) => request(
+    `${machinePrefix(machineId)}/projects/${encodeURIComponent(projectId)}/workspace-creations/preview`,
+    parseWorkspaceCreationPreview,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    },
+  ),
+  createWorkspace: (projectId: string, body: WorkspaceCreationRequest, machineId = "local") => request(
+    `${machinePrefix(machineId)}/projects/${encodeURIComponent(projectId)}/workspace-creations`,
+    (value): unknown => value,
+    { method: "POST", body: JSON.stringify(body) },
+  ),
   deleteWorkspace: (projectId: string, workspaceId: string, precondition: string, machineId = "local") => {
     const body: WorkspaceRemovalRequest = { precondition };
     return request(
