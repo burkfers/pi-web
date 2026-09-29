@@ -15,6 +15,7 @@ export interface SessionDaemonShutdownDependencies {
   pluginBackends: { closeAll(): void | Promise<void> };
   workspaceProviders: { closeAll(): void | Promise<void> };
   workspaceRemovals: { closeAll(): void | Promise<void> };
+  workspaceCreations: { closeAll(): void | Promise<void> };
   closeServer(): void | Promise<void>;
 }
 
@@ -35,6 +36,7 @@ export async function runSessionDaemonShutdown(options: SessionDaemonShutdownOpt
     ["cancel server plugin lifetimes", () => dependencies.serverPlugins.beginShutdown()],
     ["dispose catalog refresher", () => dependencies.catalogRefresher.dispose()],
     ["close workspace removal work", () => dependencies.workspaceRemovals.closeAll()],
+    ["close workspace creation work", () => dependencies.workspaceCreations.closeAll()],
     ["close plugin backend work", () => dependencies.pluginBackends.closeAll()],
     ["close workspace provider work", () => dependencies.workspaceProviders.closeAll()],
     // Plugin capability cleanup must finish while its host-owned sessions remain available.

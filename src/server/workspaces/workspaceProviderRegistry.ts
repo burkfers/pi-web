@@ -4,7 +4,9 @@ import { isAbsolute, resolve } from "node:path";
 import type {
   ProjectInput,
   ProviderClaim,
+  ProviderCreateRequest,
   ProviderWorkspace,
+  WorkspaceCreatePlan,
   WorkspaceRemovalPresentation as ProviderWorkspaceRemovalPresentation,
   WorkspaceRemovePlan,
 } from "../../server-plugin-api.js";
@@ -33,7 +35,7 @@ export type {
 const DEFAULT_PROVIDER_TIMEOUT_MS = 10_000;
 
 type ProviderTier = WorkspaceProviderTier;
-type ProviderOperation = "probe" | "list" | "prepareRemove" | "describeCreation";
+type ProviderOperation = "probe" | "list" | "prepareRemove" | "prepareCreate" | "describeCreation";
 
 export interface WorkspaceProviderRegistryLogger {
   warn(details: Record<string, unknown>, message: string): void;
@@ -80,6 +82,42 @@ export class WorkspaceProviderRemovalError extends Error {
   ) {
     super(message, options);
   }
+}
+
+export type WorkspaceProviderCreationErrorCode =
+  | "owner-conflict"
+  | "owner-unavailable"
+  | "creation-unavailable"
+  | "resolution-failed"
+  | "resolution-timeout"
+  | "preparation-failed"
+  | "preparation-timeout"
+  | "invalid-plan";
+
+export class WorkspaceProviderCreationError extends Error {
+  override name = "WorkspaceProviderCreationError";
+
+  constructor(
+    readonly code: WorkspaceProviderCreationErrorCode,
+    readonly statusCode: number,
+    message: string,
+    options: ErrorOptions = {},
+  ) {
+    super(message, options);
+  }
+}
+
+/** One live provider owner for a creation, plus the bounded planner for it. */
+export interface WorkspaceProviderCreationTarget {
+  ownerPluginId: string;
+  workspaces: readonly WorkspaceListing[];
+  /** Host listing of the workspace the creation command runs from. */
+  source: WorkspaceListing;
+  /** Provider-private projection of that same workspace. */
+  sourceWorkspace: Readonly<ProviderWorkspace>;
+  request: ProviderCreateRequest;
+  /** Invoke the owner's bounded native validation and command planner. */
+  prepare(): Promise<WorkspaceCreatePlan>;
 }
 
 interface ParsedProviderWorkspace {
@@ -316,6 +354,119 @@ export class WorkspaceProviderRegistry {
       );
     }
     throw providerRemovalError("owner-unavailable", 409, `No workspace provider currently owns project ${input.id}`);
+  }
+
+  /**
+   * Re-resolve one live owner before a creation is planned. The creation command
+   * always runs from the project's main workspace: the workspace being created
+   * does not exist yet, and no other workspace is a safer place to stand.
+   */
+  async resolveCreation(
+    project: Project,
+    request: ProviderCreateRequest,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceProviderCreationTarget> {
+    this.assertAccepting();
+    const input = snapshotProject(project);
+    const diagnostics: WorkspaceProviderDiagnostic[] = [];
+
+    for (const tier of ["primary", "fallback"] as const) {
+      const selection = await this.selectInTier(input, tier, diagnostics, signal);
+      if (selection.kind === "none") continue;
+      if (selection.kind === "conflict") {
+        throw providerCreationError(
+          "owner-conflict",
+          409,
+          `Workspace provider conflict prevents creation: ${selection.pluginIds.join(", ")}`,
+        );
+      }
+
+      const contribution = selection.contribution;
+      let validated: ValidatedProviderWorkspace[];
+      try {
+        const listed: unknown = await this.runProviderOperation(
+          contribution.pluginId,
+          "list",
+          (operationSignal) => contribution.provider.list(input, operationSignal),
+          signal,
+        );
+        const creation = await this.resolveCreationPresentation(input, contribution, signal);
+        validated = await validateProviderWorkspaces(input, contribution, listed, this.pathInspector, creation !== undefined, signal);
+      } catch (error) {
+        if (signal?.aborted === true) throw abortError(signal);
+        this.throwIfShuttingDown();
+        if (error instanceof WorkspaceProviderTimeoutError) {
+          throw providerCreationError("resolution-timeout", 504, boundedErrorMessage(error), error);
+        }
+        throw providerCreationError(
+          "resolution-failed",
+          502,
+          `Server plugin ${contribution.pluginId} could not resolve workspaces for creation: ${boundedErrorMessage(error)}`,
+          error,
+        );
+      }
+
+      const source = validated.find(({ workspace }) => workspace.isMain);
+      if (source === undefined) {
+        throw providerCreationError("resolution-failed", 502, `Server plugin ${contribution.pluginId} listed no main workspace to create from`);
+      }
+      const prepareCreate = contribution.provider.prepareCreate?.bind(contribution.provider);
+      if (prepareCreate === undefined || contribution.provider.describeCreation === undefined) {
+        throw providerCreationError(
+          "creation-unavailable",
+          409,
+          `Server plugin ${contribution.pluginId} does not support creating workspaces`,
+        );
+      }
+
+      const workspaces = Object.freeze(validated.map(({ workspace }) => workspace));
+      return Object.freeze({
+        ownerPluginId: contribution.pluginId,
+        workspaces,
+        source: source.workspace,
+        sourceWorkspace: source.providerWorkspace,
+        request: Object.freeze({ ...request }),
+        prepare: async () => {
+          let value: unknown;
+          try {
+            value = await this.runProviderOperation(
+              contribution.pluginId,
+              "prepareCreate",
+              (operationSignal) => prepareCreate(Object.freeze({
+                project: input,
+                source: source.providerWorkspace,
+                request: Object.freeze({ ...request }),
+                signal: operationSignal,
+              })),
+              signal,
+            );
+          } catch (error) {
+            if (signal?.aborted === true) throw abortError(signal);
+            this.throwIfShuttingDown();
+            if (error instanceof WorkspaceProviderTimeoutError) {
+              throw providerCreationError("preparation-timeout", 504, boundedErrorMessage(error), error);
+            }
+            throw providerCreationError(
+              "preparation-failed",
+              409,
+              `Server plugin ${contribution.pluginId} rejected this workspace creation: ${boundedErrorMessage(error)}`,
+              error,
+            );
+          }
+          return parseWorkspaceCreatePlan(value, contribution.pluginId, request.path);
+        },
+      });
+    }
+
+    const failedProbe = diagnostics.find(({ code }) => code === "probe-failed");
+    if (failedProbe !== undefined) {
+      throw providerCreationError(
+        "resolution-failed",
+        502,
+        `Workspace owner resolution failed before creation: ${boundedErrorMessage(failedProbe.message)}`,
+      );
+    }
+    throw providerCreationError("owner-unavailable", 409, `No workspace provider currently owns project ${input.id}`);
   }
 
   private async selectInTier(
@@ -791,6 +942,49 @@ function providerRemovalError(
   cause?: unknown,
 ): WorkspaceProviderRemovalError {
   return new WorkspaceProviderRemovalError(code, statusCode, message, cause === undefined ? {} : { cause });
+}
+
+function providerCreationError(
+  code: WorkspaceProviderCreationErrorCode,
+  statusCode: number,
+  message: string,
+  cause?: unknown,
+): WorkspaceProviderCreationError {
+  return new WorkspaceProviderCreationError(code, statusCode, message, cause === undefined ? {} : { cause });
+}
+
+function parseWorkspaceCreatePlan(value: unknown, pluginId: string, expectedPath: string): WorkspaceCreatePlan {
+  if (!isRecord(value)) {
+    throw providerCreationError("invalid-plan", 502, `Server plugin ${pluginId} returned an invalid workspace creation plan`);
+  }
+  const title = value["title"];
+  const command = value["command"];
+  const path = value["path"];
+  const label = value["label"];
+  const confirmation = value["confirmation"];
+  if (typeof title !== "string" || title.trim() === "") {
+    throw providerCreationError("invalid-plan", 502, `Server plugin ${pluginId} creation plan title must be a non-empty string`);
+  }
+  if (typeof command !== "string" || command.trim() === "") {
+    throw providerCreationError("invalid-plan", 502, `Server plugin ${pluginId} creation plan command must be a non-empty string`);
+  }
+  if (typeof path !== "string" || path === "") {
+    throw providerCreationError("invalid-plan", 502, `Server plugin ${pluginId} creation plan path must be a non-empty string`);
+  }
+  if (resolve(path) !== expectedPath) {
+    throw providerCreationError(
+      "invalid-plan",
+      502,
+      `Server plugin ${pluginId} creation plan targets ${path} instead of the validated path ${expectedPath}`,
+    );
+  }
+  if (typeof label !== "string" || label.trim() === "") {
+    throw providerCreationError("invalid-plan", 502, `Server plugin ${pluginId} creation plan label must be a non-empty string`);
+  }
+  if (typeof confirmation !== "string" || confirmation.trim() === "") {
+    throw providerCreationError("invalid-plan", 502, `Server plugin ${pluginId} creation plan confirmation must be a non-empty string`);
+  }
+  return Object.freeze({ title, command, path: resolve(path), label, confirmation });
 }
 
 function parseWorkspaceRemovePlan(value: unknown, pluginId: string): WorkspaceRemovePlan {

@@ -73,8 +73,10 @@ import { registerPluginBackendChannelRoutes } from "./sessiond/pluginBackendChan
 import { installPluginBackendChannelWebSocketPayloadLimit } from "./webSocketBridge.js";
 import { registerPairedPluginBackendRoutes } from "./sessiond/pluginBackendRoutes.js";
 import { registerWorkspaceRemovalRoutes } from "./sessiond/workspaceRemovalRoutes.js";
+import { registerWorkspaceCreationRoutes } from "./sessiond/workspaceCreationRoutes.js";
 import { createWorkspaceProviderRuntimeSnapshot } from "./workspaces/workspaceCatalog.js";
 import { WorkspaceRemovalService } from "./workspaces/workspaceRemovalService.js";
+import { WorkspaceCreationService } from "./workspaces/workspaceCreationService.js";
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
 const serverPluginRecovery = loadServerPluginRecoveryConfig({ env: daemonEnvironment });
@@ -362,6 +364,7 @@ async function createSessionDaemonRuntime() {
       removeTerminal: (terminalId, cwd) => { workspaceActivity.removeTerminal(terminalId, cwd); },
     });
     const workspaceRemovals = new WorkspaceRemovalService(workspaceProviders, terminals, { notices: serverNotices });
+    const workspaceCreations = new WorkspaceCreationService(workspaceProviders, terminals, { notices: serverNotices });
     const runtimeComponent = Object.freeze({
       // The deprecated-input report is fixed at startup: it was detected from
       // the captured pre-scrub daemon environment and the config snapshot this
@@ -389,6 +392,7 @@ async function createSessionDaemonRuntime() {
           pluginBackends,
           workspaceProviders,
           workspaceRemovals,
+          workspaceCreations,
           closeServer: () => app.close(),
         },
         onFailure: () => { process.exitCode = 1; },
@@ -405,7 +409,7 @@ async function createSessionDaemonRuntime() {
       attribution: statusAttribution,
       workspaceActivity,
     });
-    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
+    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, workspaceCreations, shutdown };
   } catch (error) {
     await projectLifecycleForFailedConstruction?.closeAll();
     try {
@@ -422,7 +426,7 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, workspaceCreations }: SessionDaemonRuntime): void {
   registerProjectMutationRoutes(app, projectLifecycle);
   registerProjectActivityRoutes(app, projectActivity);
   registerMachineStatusRoutes(app, machineStatus);
@@ -447,6 +451,10 @@ function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttributio
       statusAttribution.invalidate();
       projectLifecycle.scheduleCleanup();
     },
+  });
+  registerWorkspaceCreationRoutes(app, {
+    projects,
+    creations: workspaceCreations,
   });
 
   app.get("/health", () => ({
