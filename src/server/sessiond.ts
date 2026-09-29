@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import Fastify from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
@@ -43,6 +43,9 @@ import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
 import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, piWebDataDir, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
 import { createFilePiWebConfigService } from "./configRoutes.js";
 import { resolveProjectWorktreeDirectory } from "./workspaces/worktreeRoot.js";
+import { loadEffectiveProjectWorktreesConfig } from "./workspaces/projectPiWebConfig.js";
+import { WorktreeSessionService } from "./sessions/worktreeSessionService.js";
+import { registerWorktreeSessionRoutes } from "./sessiond/worktreeSessionRoutes.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
 import { DefaultPiPackageProvider, PiWebPluginCatalog } from "./piWebPluginCatalog.js";
@@ -378,6 +381,25 @@ async function createSessionDaemonRuntime() {
       notices: serverNotices,
       worktreeDirectory: (projectPath) => resolveProjectWorktreeDirectory(projectPath, config),
     });
+    const worktreeSessions = new WorktreeSessionService({
+      projects,
+      creations: {
+        preview: (project, request, signal) => workspaceCreations.preview(project, request, signal),
+        create: async (project, request, precondition, signal) => {
+          await workspaceCreations.create(project, request, precondition, signal);
+        },
+      },
+      sessions: {
+        start: (cwd) => sessions.start(cwd),
+        list: (cwd) => sessions.list(cwd),
+        recordWorktreeOwnership: (ref, ownership) => sessions.recordWorktreeOwnership(ref, ownership),
+      },
+      newSessionMode: async (projectPath) => (await loadEffectiveProjectWorktreesConfig(projectPath, config)).newSession ?? "always",
+      // "Still on disk" is a filesystem question, not a provider question: the
+      // worktree exists because a command created the directory, and that is
+      // exactly what the user needs to be told when a start fails.
+      workspaceExists: async (path) => await stat(path).then((stats) => stats.isDirectory(), () => false),
+    });
     const runtimeComponent = Object.freeze({
       // The deprecated-input report is fixed at startup: it was detected from
       // the captured pre-scrub daemon environment and the config snapshot this
@@ -422,7 +444,7 @@ async function createSessionDaemonRuntime() {
       attribution: statusAttribution,
       workspaceActivity,
     });
-    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, workspaceCreations, shutdown };
+    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, workspaceCreations, worktreeSessions, shutdown };
   } catch (error) {
     await projectLifecycleForFailedConstruction?.closeAll();
     try {
@@ -439,7 +461,7 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, workspaceCreations }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, workspaceCreations, worktreeSessions }: SessionDaemonRuntime): void {
   registerProjectMutationRoutes(app, projectLifecycle);
   registerProjectActivityRoutes(app, projectActivity);
   registerMachineStatusRoutes(app, machineStatus);
@@ -469,6 +491,7 @@ function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttributio
     projects,
     creations: workspaceCreations,
   });
+  registerWorktreeSessionRoutes(app, worktreeSessions);
 
   app.get("/health", () => ({
     ok: true,

@@ -260,8 +260,25 @@ export class SessionController {
   }
 
   async startSession(options?: { updateUrl?: boolean | undefined }) {
+    const pending = this.beginSessionStart(options);
+    if (pending === undefined) return;
+    try {
+      const session = await this.api.startSession(pending.workspacePath, pending.machineId, pending.tempId);
+      await this.resolveSessionStart(pending.tempId, session);
+    } catch (error) {
+      this.failSessionStart(pending.tempId, error);
+    }
+  }
+
+  /**
+   * Show a temporary row for a session that is about to start, and return the
+   * handles the caller needs to settle it. A start whose session lands in a
+   * different workspace — a worktree PI WEB created for it — publishes the row
+   * in the workspace the user clicked from and settles it after the switch.
+   */
+  beginSessionStart(options?: { updateUrl?: boolean | undefined }): { tempId: string; workspacePath: string; machineId: string } | undefined {
     const workspace = this.getState().selectedWorkspace;
-    if (!workspace) return;
+    if (!workspace) return undefined;
     const machineId = selectedMachineId(this.getState());
     const pendingUrlPublished = options?.updateUrl !== false;
     const pending = this.createPendingSessionStart(workspace, machineId, this.navigationSelection(), pendingUrlPublished);
@@ -273,12 +290,85 @@ export class SessionController {
     // publication is part of this operation's setup. The URL guard authorizes
     // published-token handoffs; freshness also protects unpublished starts.
     pending.navigation = this.beginNavigationOperation?.(PENDING_SESSION_START_SCOPE);
-    try {
-      const session = await this.api.startSession(workspace.path, machineId, pending.tempId);
-      await this.resolvePendingSessionStart(pending.tempId, session);
-    } catch (error) {
-      this.failPendingSessionStart(pending.tempId, error);
+    return { tempId: pending.tempId, workspacePath: workspace.path, machineId };
+  }
+
+  /** Settle a started session into its row, wherever that row now belongs. */
+  async resolveSessionStart(tempId: string, session: SessionInfo): Promise<void> {
+    await this.resolvePendingSessionStart(tempId, session);
+  }
+
+  /** Report a start that never produced a session. */
+  failSessionStart(tempId: string, error: unknown): void {
+    this.failPendingSessionStart(tempId, error);
+  }
+
+  /**
+   * Settle a start whose session landed in a *different* workspace than the one
+   * that published its temporary row — a worktree PI WEB created for it.
+   *
+   * The pending-start lifecycle is scoped to the workspace it began in: once
+   * the selection has moved to the new worktree, resolving the start the normal
+   * way finds the row is no longer current and returns without ever placing the
+   * session anywhere. The session is real, it belongs to the workspace now
+   * selected, and a session that has never been prompted has no file for a
+   * listing to find — so it is remembered as a not-yet-persisted session, put
+   * in the list that is on screen, and selected. The abandoned row goes away
+   * with it.
+   */
+  async adoptSessionInSelectedWorkspace(tempId: string, session: SessionInfo): Promise<void> {
+    const pending = this.pendingSessionStarts.get(tempId);
+    const machineId = pending?.machineId ?? selectedMachineId(this.getState());
+    if (pending !== undefined) {
+      this.pendingSessionStarts.delete(tempId);
+      pending.discarded = true;
+      moveDraft(machineSessionKey(pending.machineId, tempId), machineSessionKey(pending.machineId, session.id));
+      moveStagedAttachments(machineSessionKey(pending.machineId, tempId), machineSessionKey(pending.machineId, session.id));
+      const released = this.takeSuppressedCreatedSessionsFor(pending.cwd, pending.machineId);
+      this.applyReleasedCreatedSessions(released, pending.machineId);
     }
+
+    // Without this a list reload drops the session: it has no transcript file
+    // yet, and the listing is built from files.
+    rememberCachedNewSession(session, machineId);
+    const cachedSession = markCachedNewSessionInfo(session, machineId);
+    const queuedSends = pending?.queuedSends.splice(0) ?? [];
+    const errorOwner = this.captureSessionErrorOwner(session, pending?.originWorkspace);
+    const state = this.getState();
+    this.setState({
+      sessions: [cachedSession, ...state.sessions.filter((candidate) => candidate.id !== tempId && candidate.id !== cachedSession.id)],
+      sessionActivities: omitSessionActivity(state.sessionActivities, tempId),
+      clientQueuedSessionMessages: omitKey(state.clientQueuedSessionMessages, tempId),
+    });
+    await this.selectSession(cachedSession, { updateUrl: true });
+    await this.flushQueuedPendingSends(cachedSession, machineId, queuedSends, errorOwner);
+  }
+
+  /**
+   * Settle a start whose session landed in a workspace the user has since
+   * navigated away from. The session is real and stays where it is; only the
+   * temporary row is dropped, and anything typed into it follows the session so
+   * the prompt is still there when the user opens it.
+   */
+  releaseSessionStart(tempId: string, session: SessionInfo): void {
+    const pending = this.pendingSessionStarts.get(tempId);
+    if (pending === undefined) return;
+    this.pendingSessionStarts.delete(tempId);
+    pending.discarded = true;
+    moveDraft(machineSessionKey(pending.machineId, tempId), machineSessionKey(pending.machineId, session.id));
+    moveStagedAttachments(machineSessionKey(pending.machineId, tempId), machineSessionKey(pending.machineId, session.id));
+    const released = this.takeSuppressedCreatedSessionsFor(pending.cwd, pending.machineId);
+    this.applyReleasedCreatedSessions(released, pending.machineId);
+    const state = this.getState();
+    const remaining = state.sessions.filter((candidate) => candidate.id !== tempId);
+    if (remaining.length === state.sessions.length && state.selectedSession?.id !== tempId) return;
+    this.setState({
+      sessions: remaining,
+      ...(state.selectedSession?.id === tempId ? { selectedSession: undefined, activity: undefined, status: undefined, pendingAsk: undefined, pendingDialogs: [] } : {}),
+      sessionActivities: omitSessionActivity(state.sessionActivities, tempId),
+      clientQueuedSessionMessages: omitKey(state.clientQueuedSessionMessages, tempId),
+    });
+    if (state.selectedSession?.id === tempId) this.socket.close();
   }
 
   preferredSession(cwd: string, sessions: SessionInfo[], targetSessionId: string | undefined): SessionInfo | undefined {

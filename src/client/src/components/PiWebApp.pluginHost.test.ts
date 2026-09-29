@@ -7,6 +7,7 @@ import { TERMINAL_BROWSER_FACADE_CAPABILITY, TerminalFacade, type RequiredTermin
 import { InMemoryTerminalSelectionMemory } from "../../../../pi-web-plugins/terminal/terminalSelection";
 import type { WorkspaceFilesCapabilityV1, WorkspacePanelContext as PublicWorkspacePanelContext } from "../../../plugin-api";
 import type { Machine, Project, SessionInfo, TerminalCommandRun, Workspace } from "../api";
+import { workspacesApi } from "../api";
 import { machineScopedBundledPluginId } from "../../../shared/machinePluginIds";
 import { initialAppState } from "../appState";
 import { AppShellController } from "../appShell/appShellController";
@@ -672,9 +673,9 @@ describe("PiWebApp plugin host", () => {
     const sessions: unknown = Reflect.get(app, "sessions");
     if (!(sessions instanceof SessionController)) throw new Error("PiWebApp session controller was unavailable");
     let viewAtStart: string | null = null;
-    vi.spyOn(sessions, "startSession").mockImplementation(() => {
+    vi.spyOn(workspacesApi, "startWorktreeSession").mockImplementation(() => {
       viewAtStart = browser.url.searchParams.get("view");
-      return Promise.resolve();
+      return Promise.resolve({ session: previousSession, worktree: null });
     });
 
     await callAsyncAppMethod(app, "startSessionAndOpenChat");
@@ -723,15 +724,15 @@ describe("PiWebApp plugin host", () => {
       if (route.sessionId === started.id) setAppState(app, { ...appState(app), selectedSession: started });
       return Promise.resolve();
     })) throw new Error("Could not stub pending-session route recovery");
-    const startRequest = deferred<SessionInfo>();
+    const startRequest = deferred<{ session: SessionInfo; worktree: null }>();
     const sessions: unknown = Reflect.get(app, "sessions");
     if (!(sessions instanceof SessionController)) throw new Error("PiWebApp session controller was unavailable");
-    if (!Reflect.set(sessions, "api", { startSession: () => startRequest.promise })) throw new Error("Could not stub session start API");
+    vi.spyOn(workspacesApi, "startWorktreeSession").mockImplementation(() => startRequest.promise);
 
     await callAsyncAppMethod(app, "startSessionAndOpenChat");
     expect(browser.url.searchParams.get("view")).toBe("chat");
     callAppMethod(app, "selectMainView", "workspace");
-    startRequest.resolve(started);
+    startRequest.resolve({ session: started, worktree: null });
     await vi.waitFor(() => { expect(appState(app).sessions[0]?.id).toBe(started.id); });
 
     expect(appState(app).sessions.map((session) => session.id)).toEqual([started.id, previousSession.id]);

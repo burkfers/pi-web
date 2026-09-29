@@ -39,7 +39,7 @@ describe("WorkspaceCreationService", () => {
       prepared = context;
       return {
         title: "Create worktree: review",
-        command: `git worktree add --detach ${shellQuote(context.request.path)} ${shellQuote(context.request.baseRef)}`,
+        command: `git worktree add --detach ${shellQuote(context.request.path)} ${shellQuote(context.request.baseRef ?? "HEAD")}`,
         path: context.request.path,
         label: "detached@abc1234",
         confirmation: `Create a detached worktree at ${context.request.path}?`,
@@ -94,7 +94,7 @@ describe("WorkspaceCreationService", () => {
     let base = "origin/main";
     const provider = creatingProvider([], (context) => ({
       title: "Create worktree",
-      command: `git worktree add --detach ${shellQuote(context.request.path)} ${shellQuote(context.request.baseRef)}`,
+      command: `git worktree add --detach ${shellQuote(context.request.path)} ${shellQuote(context.request.baseRef ?? "HEAD")}`,
       path: context.request.path,
       label: "detached@abc1234",
       confirmation: `Create at ${context.request.path} from ${base}?`,

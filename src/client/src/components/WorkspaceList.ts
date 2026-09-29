@@ -39,6 +39,8 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
   @property({ attribute: false }) creatingWorkspace = false;
   /** Reports the control the create panel should anchor itself to. */
   @property({ attribute: false }) onCreate?: (anchor: HTMLElement) => void;
+  /** Start a session in this checkout instead of in a worktree of its own. */
+  @property({ attribute: false }) onStartSharedSession?: (workspace: Workspace) => void;
   @property({ attribute: false }) onToggleCollapsed?: () => void;
   @property({ attribute: false }) onFocusPreviousSection?: () => void | Promise<void>;
   @property({ attribute: false }) onFocusNextSection?: () => void | Promise<void>;
@@ -198,12 +200,22 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     const actionLabel = workspace.removal?.actionLabel ?? "Remove workspace";
     return html`
       <div class="workspace-menu-actions">
+        <button
+          class="workspace-menu-shared-session"
+          title="Start a session in this checkout, without a worktree of its own"
+          @click=${() => { this.startSharedSession(workspace); }}
+        >New session in this checkout</button>
         ${this.renderTrustToggle(workspace)}
         ${canDeleteWorkspace(workspace) ? html`
           <button class="danger" title=${deleting ? "Workspace removal in progress" : actionLabel} ?disabled=${deleting} @click=${() => { this.delete(workspace); }}>${deleting ? "Removing…" : actionLabel}</button>
         ` : null}
       </div>
     `;
+  }
+
+  private startSharedSession(workspace: Workspace): void {
+    this.openMenuWorkspaceId = undefined;
+    this.onStartSharedSession?.(workspace);
   }
 
   private renderTrustToggle(workspace: Workspace): TemplateResult {

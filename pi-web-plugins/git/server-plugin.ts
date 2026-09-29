@@ -132,13 +132,16 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
       if (await pathExists(path)) {
         throw new Error(`A file or directory already exists at ${path}`);
       }
-      const resolved = await runGit(context, source.path, ["rev-parse", "--verify", "--quiet", `${request.baseRef}^{commit}`], signal);
+      // A host that does not choose a base gets the repository's own default,
+      // so a session's worktree starts where the project starts.
+      const baseRef = request.baseRef ?? await resolveDefaultBaseRef(context, source.path, signal);
+      const resolved = await runGit(context, source.path, ["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`], signal);
       if (resolved.signal !== null) throw new Error(`git rev-parse ended from signal ${resolved.signal}`);
       if (resolved.exitCode !== 0 || resolved.stdout.trim() === "") {
-        throw new Error(`${request.baseRef} does not resolve to a commit`);
+        throw new Error(`${baseRef} does not resolve to a commit`);
       }
       const shortHead = resolved.stdout.trim().slice(0, 7);
-      const command = `git worktree add --detach ${shellQuote(path)} ${shellQuote(request.baseRef)}`;
+      const command = `git worktree add --detach ${shellQuote(path)} ${shellQuote(baseRef)}`;
       return {
         title: `Create worktree: ${basename(path) || path}`,
         command,
@@ -147,7 +150,7 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
         confirmation: [
           `Create a Git worktree at ${path}?`,
           "",
-          `It starts detached at ${request.baseRef} (${shortHead}). Nothing is committed to a branch:`,
+          `It starts detached at ${baseRef} (${shortHead}). Nothing is committed to a branch:` ,
           "check out a branch, or create one, when the work has a direction.",
           "",
           "This will run:",

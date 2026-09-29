@@ -1,6 +1,6 @@
 import { parseSessionDefaults } from "../../../shared/sessionDefaults";
 import type { SessionDefaultsUpdate } from "../../../shared/apiTypes";
-import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiSettingsUpdate, PiWebConfigValues, PromptAttachment, QueuedSessionMessage, ServerNoticeDismissRequest, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, WorkspaceCreationRequest, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
+import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiSettingsUpdate, PiWebConfigValues, PromptAttachment, QueuedSessionMessage, ServerNoticeDismissRequest, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, WorkspaceCreationRequest, WorkspaceRemovalRequest, WorktreeSessionRequestBody, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
 import { resolveAppUrl } from "../appUrl";
 import { request } from "./http";
 import {
@@ -57,6 +57,7 @@ import {
   parseThinkingLevelsResponse,
   parseWriteWorkspaceFileResponse,
   parseWorkspaceCreationPreview,
+  parseWorktreeSessionResponse,
   parseWorkspaceProviderResolution,
   parseWorkspaceTrustResponse,
   requireMachineStatusSnapshot,
@@ -194,6 +195,11 @@ export const workspacesApi = {
       body: JSON.stringify(body),
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
     },
+  ),
+  startWorktreeSession: (projectId: string, body: WorktreeSessionRequestBody, machineId = "local") => request(
+    `${machinePrefix(machineId)}/projects/${encodeURIComponent(projectId)}/worktree-sessions`,
+    parseWorktreeSessionResponse,
+    { method: "POST", body: JSON.stringify(body) },
   ),
   createWorkspace: (projectId: string, body: WorkspaceCreationRequest, machineId = "local") => request(
     `${machinePrefix(machineId)}/projects/${encodeURIComponent(projectId)}/workspace-creations`,

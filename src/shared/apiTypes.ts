@@ -671,6 +671,20 @@ export interface SessionWorktreeOwnership {
   createdAt: string;
 }
 
+/** What starting a top-level session produced. */
+export interface WorktreeSessionResponse {
+  session: SessionInfo;
+  /** The worktree PI WEB created for the session; null for a shared start. */
+  worktree: { path: string } | null;
+}
+
+export interface WorktreeSessionRequestBody {
+  /** The checkout the session is opened from. */
+  workspacePath: string;
+  /** Start in that checkout instead of in a new worktree. */
+  shared: boolean;
+}
+
 export interface SessionInfo extends SessionRef {
   path: string;
   /** True when the server has verified a backing session file exists; false when known transient. */

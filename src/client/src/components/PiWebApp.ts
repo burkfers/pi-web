@@ -1902,6 +1902,7 @@ export class PiWebApp extends LitElement {
         .workspaceCreation=${this.workspaces.creationFor(this.state.selectedProject?.id ?? "")}
         .creatingWorkspace=${this.creatingWorkspace}
         .onCreateWorkspace=${(anchor: HTMLElement) => { this.openWorkspaceCreateDialog(anchor); }}
+        .onStartSharedSession=${(workspace: Workspace) => { void this.startSharedSessionFor(workspace); }}
         .sessions=${this.state.sessions}
         .sessionStatuses=${this.state.sessionStatuses}
         .sessionActivities=${this.state.sessionActivities}
@@ -1975,7 +1976,7 @@ export class PiWebApp extends LitElement {
     await this.startSessionAndOpenChat(isCurrentSelection);
   }
 
-  private async startSessionAndOpenChat(shouldComplete: () => boolean = () => true): Promise<void> {
+  private async startSessionAndOpenChat(shouldComplete: () => boolean = () => true, options?: { shared?: boolean | undefined }): Promise<void> {
     // Open Chat before publishing the creation token; completion owns only
     // that token and leaves subsequent surface navigation untouched.
     const navigationSeq = this.navigationSelectionSeq;
@@ -1984,11 +1985,95 @@ export class PiWebApp extends LitElement {
     const machineId = selectedMachineId(this.state);
     if (isCurrent()) await this.focusChatComposer(isCurrent);
     if (!isCurrent()) return;
-    const start = this.sessions.startSession().catch((error: unknown) => {
+    const start = this.startSessionForWorkspace(workspace, machineId, isCurrent, options?.shared === true).catch((error: unknown) => {
       if (workspace === undefined) return;
       this.browserErrors.report(workspaceBrowserErrorScope(machineId, workspace.projectId, workspace.id), String(error));
     });
     void start;
+  }
+
+  /**
+   * Start one top-level session, giving it a worktree of its own unless the
+   * caller asked for the shared checkout.
+   *
+   * The worktree is created before the session and the session comes back
+   * pointing at it, so the pending row the user sees has to be settled after
+   * the selection moves to the new worktree: the row was published in the
+   * workspace they clicked from, and the session belongs to another one.
+   */
+  /**
+   * The explicit opt-out: a session in the checkout the user picked, with no
+   * worktree of its own. Useful for a quick look, a branch comparison, or work
+   * that has to see the working tree as it is.
+   */
+  private async startSharedSessionFor(workspace: Workspace): Promise<void> {
+    const navigationSeq = this.navigationSelectionSeq;
+    const isCurrent = () => navigationSeq === this.navigationSelectionSeq;
+    // The menu item belongs to a row, not to the current selection, so the
+    // session is started in the checkout that was asked for.
+    if (this.state.selectedWorkspace?.id !== workspace.id) {
+      await this.workspaces.selectWorkspace(workspace, { updateUrl: true });
+    }
+    if (!isCurrent() || this.state.selectedWorkspace?.id !== workspace.id) return;
+    await this.withChatScrollTransition(() => this.startSessionAndOpenChat(isCurrent, { shared: true }));
+  }
+
+  private async startSessionForWorkspace(
+    workspace: Workspace | undefined,
+    machineId: string,
+    isCurrent: () => boolean,
+    shared: boolean,
+  ): Promise<void> {
+    if (workspace === undefined) return;
+    const pending = this.sessions.beginSessionStart();
+    if (pending === undefined) return;
+    try {
+      const result = await workspacesApi.startWorktreeSession(workspace.projectId, { workspacePath: workspace.path, shared }, machineId);
+      if (result.worktree === null) {
+        await this.sessions.resolveSessionStart(pending.tempId, result.session);
+        return;
+      }
+      // Only the workspace switch is guarded: the pending row is always
+      // settled, because a row left standing for a session that exists is a
+      // lie the user would have to guess their way out of.
+      const switched = await this.selectWorkspaceByPath(workspace.projectId, result.worktree.path, machineId, isCurrent);
+      if (switched) {
+        // The session belongs to the worktree, not to the workspace the row was
+        // published in, so it is placed and selected there rather than resolved
+        // against a row that no longer exists.
+        await this.sessions.adoptSessionInSelectedWorkspace(pending.tempId, result.session);
+        return;
+      }
+      this.sessions.releaseSessionStart(pending.tempId, result.session);
+    } catch (error) {
+      this.sessions.failSessionStart(pending.tempId, error);
+    }
+  }
+
+  /**
+   * Move the selection to a workspace the host just created. The catalog is
+   * re-read rather than trusted: the user is waiting to work in this directory
+   * now, and a rate-limited panel refresh would make them wait for nothing.
+   */
+  private async selectWorkspaceByPath(
+    projectId: string,
+    path: string,
+    machineId: string,
+    isCurrent: () => boolean,
+  ): Promise<boolean> {
+    let workspaces = this.state.workspacesByProjectId[projectId] ?? [];
+    let created = workspaces.find((workspace) => workspace.path === path);
+    if (created === undefined) {
+      workspaces = await this.workspaces.refreshProjectWorkspaces(projectId, machineId);
+      created = workspaces.find((workspace) => workspace.path === path);
+    }
+    if (created === undefined) {
+      this.browserErrors.report(projectBrowserErrorScope(machineId, projectId), `The new worktree at ${path} is not listed yet`);
+      return false;
+    }
+    if (!isCurrent()) return false;
+    await this.workspaces.selectWorkspace(created, { updateUrl: true });
+    return isCurrent() && this.state.selectedWorkspace?.id === created.id;
   }
 
   private async focusNavigationTarget(target: NavigationFocusTarget, shouldComplete: () => boolean = () => true): Promise<void> {
@@ -2907,7 +2992,9 @@ export class PiWebApp extends LitElement {
     }
     await this.workspaces.selectWorkspace(created, { updateUrl: true });
     if (!isCurrent() || this.state.selectedWorkspace?.id !== created.id) return;
-    await this.startSessionAndOpenChat(isCurrent);
+    // The user chose this worktree in the dialog, so the session belongs to the
+    // worktree they asked for rather than to a new one of its own.
+    await this.startSessionAndOpenChat(isCurrent, { shared: true });
   }
 
   private async deleteWorkspace(workspace = this.state.selectedWorkspace): Promise<void> {

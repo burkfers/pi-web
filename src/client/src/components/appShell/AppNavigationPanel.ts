@@ -60,6 +60,8 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) workspaceCreation?: WorkspaceCreationPresentation;
   @property({ type: Boolean }) creatingWorkspace = false;
   @property({ attribute: false }) onCreateWorkspace?: (anchor: HTMLElement) => void | Promise<void>;
+  /** Start a session in the given checkout instead of in a worktree of its own. */
+  @property({ attribute: false }) onStartSharedSession?: (workspace: Workspace) => void | Promise<void>;
   @property({ attribute: false }) onStartSession?: () => void | Promise<void>;
   @property({ attribute: false }) onSelectSession?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onArchiveSession?: (session: SessionInfo) => void | Promise<void>;
@@ -108,6 +110,7 @@ export class AppNavigationPanel extends LitElement {
     selectWorkspace: (workspace: Workspace) => this.onSelectWorkspace?.(workspace),
     deleteWorkspace: (workspace: Workspace) => this.onDeleteWorkspace?.(workspace),
     createWorkspace: (anchor: HTMLElement) => this.onCreateWorkspace?.(anchor),
+    startSharedSession: (workspace: Workspace) => this.onStartSharedSession?.(workspace),
     toggleSessions: () => { this.onToggleSessions?.(); },
     archivedCollapsed: () => this.onArchivedCollapsed?.(),
     startSession: () => this.onStartSession?.(),
@@ -196,6 +199,7 @@ export class AppNavigationPanel extends LitElement {
         .creation=${this.workspaceCreation}
         .creatingWorkspace=${this.creatingWorkspace}
         .onCreate=${this.childCallbacks.createWorkspace}
+        .onStartSharedSession=${this.childCallbacks.startSharedSession}
         .collapsible=${this.collapsible}
         .collapsed=${this.workspacesCollapsed}
         .workspaceLabelItems=${this.workspaceLabelItems}

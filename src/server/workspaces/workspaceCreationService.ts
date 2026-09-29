@@ -3,10 +3,7 @@ import { isAbsolute, parse, relative, resolve, sep } from "node:path";
 import type { ProviderCreateRequest } from "../../server-plugin-api.js";
 import type { TerminalCommandRun, WorkspaceCreationPreview } from "../../shared/apiTypes.js";
 import { workspaceCreateOperation, workspaceCreationMetadata } from "../../shared/workspaceCreation.js";
-import {
-  WORKSPACE_CREATION_OPERATION_TIMEOUT_MS,
-  type ParsedWorkspaceCreationRequest,
-} from "../../shared/workspaceCreationProtocol.js";
+import { WORKSPACE_CREATION_OPERATION_TIMEOUT_MS } from "../../shared/workspaceCreationProtocol.js";
 import type { Project } from "../types.js";
 import type { RunTerminalCommandOptions } from "../terminals/requiredTerminalService.js";
 import type { ServerNoticeCreator } from "../notices/serverNoticeService.js";
@@ -26,6 +23,20 @@ export interface WorkspaceCreationProvider {
 
 export interface WorkspaceCreationTerminalHost {
   runCommand(options: RunTerminalCommandOptions): TerminalCommandRun;
+}
+
+/**
+ * What a caller asks to create. The HTTP protocol parses and bounds a request
+ * of this shape, but a host-driven creation (a worktree for a new session)
+ * builds one directly and lets the provider choose the base ref.
+ */
+export interface ProviderCreationRequest {
+  /** Directory name for the new workspace, already bounded by the host. */
+  readonly name: string;
+  /** Commit-ish to start at; omitted means the provider's own default. */
+  readonly baseRef?: string;
+  /** Absolute target path; omitted means the worktree directory. */
+  readonly path?: string;
 }
 
 export interface WorkspaceCreationServiceOptions {
@@ -89,7 +100,7 @@ export class WorkspaceCreationService {
    * checkout, or the filesystem root — is a configuration problem the user has
    * to fix, so it is reported as such rather than as a server failure.
    */
-  private async providerRequestFor(project: Project, request: ParsedWorkspaceCreationRequest): Promise<ProviderCreateRequest> {
+  private async providerRequestFor(project: Project, request: ProviderCreationRequest): Promise<ProviderCreateRequest> {
     try {
       return await buildProviderRequest(project, request, this.worktreeDirectory);
     } catch (error) {
@@ -101,7 +112,7 @@ export class WorkspaceCreationService {
   /** Resolve and validate the plan a confirmation would be based on. */
   async preview(
     project: Project,
-    request: ParsedWorkspaceCreationRequest,
+    request: ProviderCreationRequest,
     signal?: AbortSignal,
   ): Promise<WorkspaceCreationPreview> {
     throwIfAborted(this.shutdown.signal);
@@ -118,7 +129,7 @@ export class WorkspaceCreationService {
    */
   async create(
     project: Project,
-    request: ParsedWorkspaceCreationRequest,
+    request: ProviderCreationRequest,
     precondition: string,
     signal?: AbortSignal,
   ): Promise<TerminalCommandRun> {
@@ -157,7 +168,7 @@ export class WorkspaceCreationService {
 
   private async executeCreation(
     project: Project,
-    request: ParsedWorkspaceCreationRequest,
+    request: ProviderCreationRequest,
     precondition: string,
     flightSignal: AbortSignal,
   ): Promise<TerminalCommandRun> {
@@ -210,7 +221,7 @@ export class WorkspaceCreationService {
 
   private async resolvePlan(
     project: Project,
-    request: ParsedWorkspaceCreationRequest,
+    request: ProviderCreationRequest,
     signal: AbortSignal,
   ): Promise<PlannedCreation> {
     const providerRequest = await this.providerRequestFor(project, request);
@@ -290,13 +301,17 @@ export function derivedWorktreeDirectory(projectPath: string): string {
 
 async function buildProviderRequest(
   project: Project,
-  request: ParsedWorkspaceCreationRequest,
+  request: ProviderCreationRequest,
   worktreeDirectory: (projectPath: string) => string | Promise<string>,
 ): Promise<ProviderCreateRequest> {
   const path = request.path === undefined
     ? resolve(await worktreeDirectory(project.path), request.name)
     : resolve(request.path);
-  return Object.freeze({ name: request.name, baseRef: request.baseRef, path });
+  return Object.freeze({
+    name: request.name,
+    ...(request.baseRef === undefined ? {} : { baseRef: request.baseRef }),
+    path,
+  });
 }
 
 /**
@@ -327,7 +342,7 @@ function validateTargetPath(project: Project, target: WorkspaceProviderCreationT
 function creationPrecondition(
   project: Project,
   ownerPluginId: string,
-  request: ParsedWorkspaceCreationRequest,
+  request: ProviderCreationRequest,
   plan: Awaited<ReturnType<WorkspaceProviderCreationTarget["prepare"]>>,
 ): string {
   const digest = createHash("sha256").update(JSON.stringify([
@@ -383,7 +398,7 @@ async function runBoundedCreation<T>(
   }
 }
 
-function creationFlightKey(projectId: string, request: ParsedWorkspaceCreationRequest): string {
+function creationFlightKey(projectId: string, request: ProviderCreationRequest): string {
   return JSON.stringify([projectId, request.name, request.baseRef, request.path ?? null]);
 }
 

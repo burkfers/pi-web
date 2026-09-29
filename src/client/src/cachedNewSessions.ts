@@ -55,6 +55,8 @@ export function stripCachedNewSessionMarker(session: SessionInfo): SessionInfo {
     messageCount: session.messageCount,
     firstMessage: session.firstMessage,
     ...(session.parentSessionPath === undefined ? {} : { parentSessionPath: session.parentSessionPath }),
+    ...(session.worktree === undefined ? {} : { worktree: session.worktree }),
+    ...(session.detachment === undefined ? {} : { detachment: session.detachment }),
     ...("machineId" in session && typeof session.machineId === "string" ? { machineId: session.machineId } : { machineId: defaultMachineId }),
     ...(session.archived === true ? { archived: true } : {}),
     ...(session.archivedAt === undefined ? {} : { archivedAt: session.archivedAt }),

@@ -402,8 +402,14 @@ export interface ProviderCreationDescriptor {
 export interface ProviderCreateRequest {
   /** Directory name for the new workspace, already bounded by the host. */
   readonly name: string;
-  /** Commit-ish the new workspace starts at, already bounded by the host. */
-  readonly baseRef: string;
+  /**
+   * Commit-ish the new workspace starts at, already bounded by the host.
+   *
+   * Omitted when the host has no opinion — a worktree created for a session
+   * starts wherever the repository says it should — and the provider resolves
+   * its own default. A ref the host does supply is used verbatim.
+   */
+  readonly baseRef?: string;
   /** Absolute target path, already resolved and path-validated by the host. */
   readonly path: string;
 }

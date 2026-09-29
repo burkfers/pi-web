@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
-import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parsePiSettingsSnapshot, parseRealtimeStreamEvent, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionModelCatalogResponse, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeForkResult, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseWorkspace, parseWorkspaceProviderResolution } from "./parsers";
+import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parsePiSettingsSnapshot, parseRealtimeStreamEvent, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionModelCatalogResponse, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeForkResult, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseWorkspace, parseWorkspaceProviderResolution, parseWorktreeSessionResponse } from "./parsers";
 
 describe("API parsers", () => {
   it("preserves interactive API-key flow hints and defaults providers without one", () => {
@@ -553,6 +553,33 @@ describe("API parsers", () => {
       firstMessage: "",
     });
     expect(() => parseSessionInfo({ id: "s1", path: "", cwd: "/repo", persisted: "yes", created: "now", modified: "now", messageCount: 0, firstMessage: "" })).toThrow("Expected optional boolean field: persisted");
+  });
+
+  it("carries worktree ownership on a session", () => {
+    expect(parseSessionInfo({
+      id: "s1",
+      path: "/sessions/s1.jsonl",
+      cwd: "/worktrees/repo/session-1",
+      created: "2026-01-01T00:00:00.000Z",
+      modified: "2026-01-01T00:01:00.000Z",
+      messageCount: 0,
+      firstMessage: "",
+      worktree: { owned: true, createdAt: "2026-01-01T00:00:00.000Z" },
+    }).worktree).toEqual({ owned: true, createdAt: "2026-01-01T00:00:00.000Z" });
+    // A worktree PI WEB did not create must be distinguishable from one it
+    // did, so an unowned marker is a protocol error rather than a default.
+    expect(() => parseSessionInfo({
+      id: "s1", path: "", cwd: "/repo", created: "now", modified: "now", messageCount: 0, firstMessage: "",
+      worktree: { owned: false },
+    })).toThrow("Invalid session worktree field");
+  });
+
+  it("parses a worktree session start response", () => {
+    const session = { id: "s1", path: "/sessions/s1.jsonl", cwd: "/worktrees/repo/session-1", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
+    expect(parseWorktreeSessionResponse({ session, worktree: { path: "/worktrees/repo/session-1" } })).toEqual({ session, worktree: { path: "/worktrees/repo/session-1" } });
+    expect(parseWorktreeSessionResponse({ session, worktree: null })).toEqual({ session, worktree: null });
+    expect(() => parseWorktreeSessionResponse({ session, worktree: { path: 3 } })).toThrow("Expected string field: path");
+    expect(() => parseWorktreeSessionResponse({ session, worktree: 7 })).toThrow("Invalid worktree session response");
   });
 
   it("parses the model catalog with enabled state and natural catalog positions", () => {
