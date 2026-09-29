@@ -969,6 +969,9 @@ export async function resolveWebProjectTrusted(resolution: WebProjectTrustResolu
  * and PI WEB's sections land after them. Returns `undefined` when there is
  * nothing to append, leaving the loader exactly as pi configures it.
  */
+/** Resolves the per-session workspace section for one session's working directory. */
+export type WorkspaceContextSectionResolver = (cwd: string) => Promise<readonly string[]>;
+
 export function piWebResourceLoaderOptions(
   appendSystemPromptSections: readonly string[],
 ): CreateAgentSessionServicesOptions["resourceLoaderOptions"] | undefined {
@@ -984,9 +987,13 @@ function createDefaultRuntimeFactory(
   subsessions?: SubsessionToolDeps,
   askUser?: AskUserToolDeps,
   appendSystemPromptSections: readonly string[] = [],
+  workspaceContextSections?: WorkspaceContextSectionResolver,
 ): PiWebCreateAgentSessionRuntimeFactory {
-  const resourceLoaderOptions = piWebResourceLoaderOptions(appendSystemPromptSections);
   return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel, initialThinkingLevel, delegationToolsEnabled }) => {
+    // Resolved per session start, not once per daemon: which workspaces exist,
+    // and which one this session is in, are facts about this session.
+    const sessionSections = workspaceContextSections === undefined ? [] : await workspaceContextSections(cwd);
+    const sessionResourceLoaderOptions = piWebResourceLoaderOptions([...appendSystemPromptSections, ...sessionSections]);
     // PI WEB always honors pi's project-trust model. When the workspace ships
     // trust-requiring resources, trust is resolved exactly once, mirroring the
     // SDK's flow: the resource loader first loads the pre-trust extension set
@@ -1009,7 +1016,7 @@ function createDefaultRuntimeFactory(
       agentDir,
       modelRuntime,
       settingsManager,
-      resourceLoaderOptions: { ...resourceLoaderOptions, eventBus },
+      resourceLoaderOptions: { ...sessionResourceLoaderOptions, eventBus },
       ...(projectTrustRequiring
         ? {
             resourceLoaderReloadOptions: {
@@ -1107,6 +1114,8 @@ export interface PiSessionServiceDependencies {
    * it with container environment facts in Docker deployments.
    */
   appendSystemPromptSections?: readonly string[];
+  /** Per-session workspace facts; resolved for each session's working directory. */
+  workspaceContextSections?: WorkspaceContextSectionResolver;
   /** Daemon-lifetime open-ask state; defaults to an in-memory store in tests. */
   pendingAskStore?: PendingAskStore;
   /** Daemon-lifetime open-dialog state; defaults to an in-memory store in tests. */
@@ -1278,6 +1287,7 @@ export class PiSessionService implements SessionRouteService {
       },
       deps.askUserEnabled === true ? { open: (input) => this.openAsk(input) } : undefined,
       deps.appendSystemPromptSections ?? [],
+      deps.workspaceContextSections,
     );
     this.createAgentRuntime = deps.createAgentRuntime ?? defaultCreateAgentRuntime;
     this.workspaceActivity = deps.workspaceActivity;

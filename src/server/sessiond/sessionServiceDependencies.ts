@@ -1,4 +1,4 @@
-import type { PiSessionServiceDependencies } from "../sessions/piSessionService.js";
+import type { PiSessionServiceDependencies, WorkspaceContextSectionResolver } from "../sessions/piSessionService.js";
 
 /**
  * The collaborators sessiond constructs, in the shape the assembly needs them.
@@ -31,6 +31,8 @@ export interface SessionServiceDependencyInput {
   askUserEnabled: boolean;
   /** Deployment facts appended to session system prompts; empty when there are none. */
   appendSystemPromptSections: readonly string[];
+  /** Per-session workspace facts, resolved from the live workspace authority. */
+  workspaceContextSections?: WorkspaceContextSectionResolver;
   /** Auto-cancel delay for extension dialogs whose extension set no timeout; `0` waits forever. */
   extensionDialogsTimeoutMs: number;
 }
@@ -58,6 +60,7 @@ export function sessionServiceDependencies(input: SessionServiceDependencyInput)
     subsessionsEnabled: input.spawnTargets !== undefined && input.subsessionsEnabled,
     askUserEnabled: input.askUserEnabled,
     appendSystemPromptSections: input.appendSystemPromptSections,
+    ...(input.workspaceContextSections === undefined ? {} : { workspaceContextSections: input.workspaceContextSections }),
     extensionDialogsTimeoutMs: input.extensionDialogsTimeoutMs,
     notificationStore: input.notificationStore,
     unreadStore: input.unreadStore,
