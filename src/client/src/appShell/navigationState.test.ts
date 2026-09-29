@@ -13,29 +13,30 @@ describe("navigationState", () => {
   it("skips hidden sections when choosing the default section", () => {
     const selected = { selectedProject: {}, selectedWorkspace: undefined };
 
-    expect(defaultNavigationSection(selected, ["workspaces"])).toBe("sessions");
+    // Hiding checkouts leaves sessions as the first thing a user can navigate.
+    expect(defaultNavigationSection(selected, ["workspaces"])).toBe("projects");
     expect(defaultNavigationSection({ selectedProject: undefined, selectedWorkspace: undefined }, ["projects", "workspaces"])).toBe("sessions");
     // Prefer a navigable hierarchy section over the optional machine bubble.
-    expect(defaultNavigationSection({ selectedProject: {}, selectedWorkspace: {} }, ["sessions"])).toBe("projects");
-    expect(defaultNavigationSection({ selectedProject: {}, selectedWorkspace: {} }, ["projects", "workspaces", "sessions"])).toBe("machines");
+    expect(defaultNavigationSection({ selectedProject: {}, selectedWorkspace: {} }, ["sessions"])).toBe("workspaces");
+    expect(defaultNavigationSection({ selectedProject: {}, selectedWorkspace: {} }, ["projects", "sessions", "workspaces"])).toBe("machines");
   });
 
   it("advances to the next visible section and stops at the end instead of wrapping", () => {
-    expect(nextNavigationSection("workspaces")).toBe("sessions");
-    expect(nextNavigationSection("sessions")).toBeUndefined();
-    expect(nextNavigationSection("workspaces", ["sessions", "projects"])).toBeUndefined();
-    expect(nextNavigationSection("machines", ["projects"])).toBe("workspaces");
+    expect(nextNavigationSection("sessions")).toBe("workspaces");
+    expect(nextNavigationSection("workspaces")).toBeUndefined();
+    expect(nextNavigationSection("sessions", ["workspaces", "projects"])).toBeUndefined();
+    expect(nextNavigationSection("machines", ["projects"])).toBe("sessions");
   });
 
   it("resolves a requested section to itself, or the next visible one when hidden", () => {
     expect(resolveVisibleNavigationSection("workspaces", [])).toBe("workspaces");
-    expect(resolveVisibleNavigationSection("workspaces", ["workspaces"])).toBe("sessions");
+    expect(resolveVisibleNavigationSection("workspaces", ["workspaces"])).toBeUndefined();
     expect(resolveVisibleNavigationSection("sessions", ["workspaces", "sessions"])).toBeUndefined();
   });
 
   it("sanitizes hidden sections to known, non-blanking sets", () => {
     expect(sanitizeHiddenNavigationSections(undefined)).toEqual([]);
-    expect(sanitizeHiddenNavigationSections(["workspaces", "nope", "sessions"])).toEqual(["workspaces", "sessions"]);
+    expect(sanitizeHiddenNavigationSections(["workspaces", "nope", "sessions"])).toEqual(["sessions", "workspaces"]);
     expect(sanitizeHiddenNavigationSections(NAVIGATION_SECTION_ORDER)).toEqual([]);
     expect(sanitizeHiddenNavigationSections("workspaces")).toEqual([]);
     expect(isNavigationSectionHidden("workspaces", ["workspaces"])).toBe(true);
@@ -47,7 +48,7 @@ describe("navigationState", () => {
     expect(expandedNavigationSection(undefined, state)).toBe("workspaces");
     expect(expandedNavigationSection("sessions", state)).toBe("sessions");
     expect(expandedNavigationSection("none", state)).toBeUndefined();
-    expect(expandedNavigationSection(undefined, state, ["workspaces"])).toBe("sessions");
+    expect(expandedNavigationSection(undefined, state, ["workspaces"])).toBe("projects");
   });
 
   it("rebases an explicitly expanded section when it becomes hidden", () => {
@@ -60,7 +61,7 @@ describe("navigationState", () => {
 
     expect(isNavigationSectionCollapsed("projects", { isMobileLayout: true, expanded: "sessions", state })).toBe(true);
     expect(isNavigationSectionCollapsed("sessions", { isMobileLayout: true, expanded: "sessions", state })).toBe(false);
-    expect(isNavigationSectionCollapsed("sessions", { isMobileLayout: true, expanded: undefined, state, hiddenSections: ["workspaces"] })).toBe(false);
+    expect(isNavigationSectionCollapsed("sessions", { isMobileLayout: true, expanded: undefined, state, hiddenSections: ["projects"] })).toBe(false);
     expect(isNavigationSectionCollapsed("projects", { isMobileLayout: true, expanded: undefined, state, hiddenSections: ["workspaces"] })).toBe(true);
   });
 
@@ -95,7 +96,9 @@ describe("navigationState", () => {
   it("treats the hidden default section as the implicitly expanded one on mobile", () => {
     const state = { selectedProject: {}, selectedWorkspace: undefined };
 
-    expect(toggleNavigationSection(undefined, "sessions", { isMobileLayout: true, state, hiddenSections: ["workspaces"] })).toBe("none");
+    // The default section with no checkout selected is checkouts; tapping the
+    // session section is a different section, so the accordion closes.
+    expect(toggleNavigationSection(undefined, "sessions", { isMobileLayout: true, state, hiddenSections: ["workspaces"] })).toBe("sessions");
     expect(toggleNavigationSection("none", "sessions", { isMobileLayout: true, state, hiddenSections: ["workspaces"] })).toBe("sessions");
   });
 

@@ -14,13 +14,15 @@ describe("settings-general-panel sidebar", () => {
     const panel = await mountPanel({ hiddenNavigationSections: ["workspaces"] });
 
     const toggles = sidebarToggles(panel);
+    // Sessions come before checkouts: the sidebar lists what a user comes back
+    // to first, and a session usually has a checkout of its own now.
     expect(toggles.map((toggle) => toggle.label)).toEqual([
       "Show Machines in sidebar",
       "Show Projects in sidebar",
-      "Show Workspaces in sidebar",
       "Show Sessions in sidebar",
+      "Show Workspaces in sidebar",
     ]);
-    expect(toggles.map((toggle) => toggle.checked)).toEqual([true, true, false, true]);
+    expect(toggles.map((toggle) => toggle.checked)).toEqual([true, true, true, false]);
   });
 
   it("toggles a section through the callback without a save button", async () => {
@@ -32,11 +34,11 @@ describe("settings-general-panel sidebar", () => {
       if (toggle === undefined) throw new Error(`Missing sidebar toggle ${String(index)}`);
       return toggle;
     };
-    togglesAt(2).input.click();
+    togglesAt(3).input.click();
     expect(toggles).toEqual([["workspaces", true]]);
     panel.hiddenNavigationSections = ["workspaces"];
     await panel.updateComplete;
-    togglesAt(2).input.click();
+    togglesAt(3).input.click();
     expect(toggles).toEqual([["workspaces", true], ["workspaces", false]]);
   });
 

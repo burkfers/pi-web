@@ -1,6 +1,12 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 
-export const NAVIGATION_SECTION_ORDER = ["machines", "projects", "workspaces", "sessions"] as const;
+/**
+ * Sessions sit above checkouts because a session is what a user comes back to,
+ * and under the one-session-per-worktree default most of them have a worktree
+ * of their own — which makes the checkout list a detail of where they run
+ * rather than the place work starts.
+ */
+export const NAVIGATION_SECTION_ORDER = ["machines", "projects", "sessions", "workspaces"] as const;
 export type NavigationSection = (typeof NAVIGATION_SECTION_ORDER)[number];
 export type ExpandedNavigationSection = NavigationSection | "none" | undefined;
 

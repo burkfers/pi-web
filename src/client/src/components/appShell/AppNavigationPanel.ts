@@ -192,28 +192,6 @@ export class AppNavigationPanel extends LitElement {
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></project-list>
       `}
-      ${isNavigationSectionHidden("workspaces", this.hiddenSections) ? null : html`
-      <workspace-list
-        .workspaces=${this.workspaces}
-        .selected=${this.selectedWorkspace}
-        .machineId=${this.selectedMachine?.id ?? "local"}
-        .statusSnapshot=${this.selectedMachineStatusSnapshot()}
-        .deletingWorkspaceIds=${this.deletingWorkspaceIds}
-        .creation=${this.workspaceCreation}
-        .creatingWorkspace=${this.creatingWorkspace}
-        .onCreate=${this.childCallbacks.createWorkspace}
-        .onStartSharedSession=${this.childCallbacks.startSharedSession}
-        .collapsible=${this.collapsible}
-        .collapsed=${this.workspacesCollapsed}
-        .workspaceLabelItems=${this.workspaceLabelItems}
-        .onToggleCollapsed=${this.childCallbacks.toggleWorkspaces}
-        .onSelect=${this.childCallbacks.selectWorkspace}
-        .onDelete=${this.childCallbacks.deleteWorkspace}
-        .onFocusPreviousSection=${this.childCallbacks.previousFromWorkspaces}
-        .onFocusNextSection=${this.childCallbacks.nextFromWorkspaces}
-        .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
-      ></workspace-list>
-      `}
       ${isNavigationSectionHidden("sessions", this.hiddenSections) ? null : html`
       <session-list
         .sessions=${this.sessions}
@@ -249,6 +227,28 @@ export class AppNavigationPanel extends LitElement {
         .onFocusNextSection=${this.childCallbacks.nextFromSessions}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></session-list>
+      `}
+      ${isNavigationSectionHidden("workspaces", this.hiddenSections) ? null : html`
+      <workspace-list
+        .workspaces=${this.workspaces}
+        .selected=${this.selectedWorkspace}
+        .machineId=${this.selectedMachine?.id ?? "local"}
+        .statusSnapshot=${this.selectedMachineStatusSnapshot()}
+        .deletingWorkspaceIds=${this.deletingWorkspaceIds}
+        .creation=${this.workspaceCreation}
+        .creatingWorkspace=${this.creatingWorkspace}
+        .onCreate=${this.childCallbacks.createWorkspace}
+        .onStartSharedSession=${this.childCallbacks.startSharedSession}
+        .collapsible=${this.collapsible}
+        .collapsed=${this.workspacesCollapsed}
+        .workspaceLabelItems=${this.workspaceLabelItems}
+        .onToggleCollapsed=${this.childCallbacks.toggleWorkspaces}
+        .onSelect=${this.childCallbacks.selectWorkspace}
+        .onDelete=${this.childCallbacks.deleteWorkspace}
+        .onFocusPreviousSection=${this.childCallbacks.previousFromWorkspaces}
+        .onFocusNextSection=${this.childCallbacks.nextFromWorkspaces}
+        .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
+      ></workspace-list>
       `}
     `;
   }
