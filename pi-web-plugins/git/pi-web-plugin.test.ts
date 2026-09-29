@@ -426,6 +426,33 @@ describe("bundled Git browser plugin", () => {
     render(null, container);
   });
 
+  it("asks the host to re-read workspaces when the polled branch no longer matches the workspace label", async () => {
+    vi.useFakeTimers();
+    const backend = backendFixture({ branch: "feature/renamed" });
+    const panel = requiredPanel(activate("git"));
+    const container = document.createElement("div");
+    const refreshWorkspaces = vi.fn();
+    // The list still shows the branch this workspace had when it was listed.
+    const stale = { ...gitWorkspace, label: "main" };
+    const context = { ...panelContext(backend.request, stale), host: { requestRender: vi.fn(), refreshWorkspaces } };
+    document.body.append(container);
+    render(panel.render(context), container);
+    await settleBackend();
+
+    expect(refreshWorkspaces).toHaveBeenCalled();
+
+    // A workspace whose label already matches is not reported on every poll.
+    refreshWorkspaces.mockClear();
+    const current = { ...gitWorkspace, label: "feature/renamed" };
+    const settled = { ...panelContext(backend.request, current), host: { requestRender: vi.fn(), refreshWorkspaces } };
+    render(panel.render(settled), container);
+    await settleBackend();
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    expect(refreshWorkspaces).not.toHaveBeenCalled();
+    render(null, container);
+  });
+
   it("refreshes truncation metadata even when polled diff text has the same hash", async () => {
     vi.useFakeTimers();
     const backend = backendFixture();

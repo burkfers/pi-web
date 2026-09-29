@@ -376,6 +376,14 @@ export type PluginPeer =
 
 export interface WorkspaceHost {
   requestRender(): void;
+  /**
+   * The project's workspace list may no longer match what this panel shows — a
+   * worktree created, removed, or pointed at another branch outside PI WEB.
+   * Requests a re-read; the host coalesces and rate-limits these, so a panel
+   * may call it whenever it notices a difference. Optional: hosts that predate
+   * it simply do not provide it.
+   */
+  refreshWorkspaces?(): void;
 }
 
 export type WorkspacePanelHost = WorkspaceHost;

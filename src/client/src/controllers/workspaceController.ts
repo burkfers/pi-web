@@ -9,6 +9,13 @@ import { TrailingRefreshCoordinator } from "./trailingRefreshCoordinator";
 import { InMemoryWorkspaceSelectionMemory, selectPreferredWorkspace, type WorkspaceSelectionMemory } from "./workspaceSelection";
 
 const WORKSPACE_TOPOLOGY_REFRESH_DEBOUNCE_MS = 50;
+/**
+ * Minimum gap between two re-reads of the same project's workspace list.
+ * Topology can change under us at any time (a branch switch, a worktree added
+ * in a terminal), and re-reading it costs a provider listing per project; this
+ * bounds how often that can happen without waiting for a focus change.
+ */
+const WORKSPACE_TOPOLOGY_REFRESH_FLOOR_MS = 10_000;
 const WORKSPACE_SELECTION_SCOPE = ["machine", "project", "workspace", "session"] as const;
 
 export interface WorkspaceControllerDependencies {
@@ -18,6 +25,7 @@ export interface WorkspaceControllerDependencies {
   beginNavigationOperation?: (scope: readonly NavigationScope[]) => NavigationFreshness;
   onBackgroundError?: (message: string, error: unknown) => void;
   topologyRefreshDebounceMs?: number;
+  topologyRefreshFloorMs?: number;
 }
 
 interface WorkspaceMutationGuard {
@@ -35,6 +43,10 @@ export class WorkspaceController {
   private readonly onBackgroundError: (message: string, error: unknown) => void;
   private readonly browserErrors: BrowserErrorReporter;
   private readonly topologyRefreshes: TrailingRefreshCoordinator<string>;
+  private readonly topologyRefreshFloorMs: number;
+  /** When each project's list was last re-read, for the refresh floor. */
+  private readonly topologyRefreshedAt = new Map<string, number>();
+  private topologyFloorWait: Promise<void> | undefined;
 
   constructor(
     private readonly getState: GetState,
@@ -53,6 +65,7 @@ export class WorkspaceController {
     this.topologyRefreshes = new TrailingRefreshCoordinator(
       deps.topologyRefreshDebounceMs ?? WORKSPACE_TOPOLOGY_REFRESH_DEBOUNCE_MS,
     );
+    this.topologyRefreshFloorMs = deps.topologyRefreshFloorMs ?? WORKSPACE_TOPOLOGY_REFRESH_FLOOR_MS;
   }
 
   clearSelection(options?: { updateUrl?: boolean | undefined }) {
@@ -165,6 +178,13 @@ export class WorkspaceController {
    * Re-lists the selected project's workspaces so worktrees created or removed outside
    * PI WEB become visible, without disturbing the current selection.
    *
+   * Rate-limited per project: a caller that notices a difference (a panel whose
+   * workspace no longer matches, a finished command) may call this as often as
+   * it likes, and the re-read still happens at most once per floor. Pass
+   * `immediate` for the moments where a stale list is actively misleading —
+   * a creation or removal the user just performed — which skips the wait and
+   * restarts the floor.
+   *
    * Deliberately never routes through `selectWorkspace`: that has no already-selected
    * guard, so re-picking the same workspace would still call `clearActiveSession()` and
    * `resetWorkspaceScopedState()`, closing the session socket and blanking chat, file
@@ -174,18 +194,24 @@ export class WorkspaceController {
    * If the selected workspace disappeared, the selection is left alone: the user is
    * working there and the existing deletion path owns recovery.
    */
-  async refreshSelectedProjectTopology(): Promise<void> {
+  async refreshSelectedProjectTopology(options?: { immediate?: boolean }): Promise<void> {
     const state = this.getState();
     const project = state.selectedProject;
     if (project === undefined) return;
     const machineId = selectedMachineId(state);
+    if (options?.immediate !== true) {
+      await this.waitForTopologyRefreshFloor(machineProjectKey(machineId, project.id));
+      if (this.getState().selectedProject?.id !== project.id || selectedMachineId(this.getState()) !== machineId) return;
+    }
     // Callers are independent (browser resume and the plugin-facing app refresh), so two
     // refreshes for the same machine+project can overlap. Sharing one request keeps a slow
     // earlier response from landing last and overwriting a newer list, which would make a
     // just-created worktree disappear again.
-    await this.topologyRefreshes.request(machineProjectKey(machineId, project.id), async () => {
+    const key = machineProjectKey(machineId, project.id);
+    await this.topologyRefreshes.request(key, async () => {
       try {
         const resolution = await this.api.workspaceResolution(project.id, machineId);
+        this.topologyRefreshedAt.set(key, Date.now());
         const current = this.getState();
         if (selectedMachineId(current) !== machineId || current.selectedProject?.id !== project.id) return;
         this.applyProjectWorkspaces(project.id, resolution);
@@ -193,6 +219,27 @@ export class WorkspaceController {
         this.onBackgroundError(`Failed to refresh workspaces for project ${project.id} on ${machineId}`, error);
       }
     });
+  }
+
+  /**
+   * Holds a rate-limited refresh until the floor for this project has passed.
+   * Concurrent callers share one timer, so a burst of signals costs one
+   * re-read rather than one per signal.
+   */
+  private async waitForTopologyRefreshFloor(key: string): Promise<void> {
+    const lastRefreshedAt = this.topologyRefreshedAt.get(key);
+    if (lastRefreshedAt === undefined) return;
+    const remaining = this.topologyRefreshFloorMs - (Date.now() - lastRefreshedAt);
+    if (remaining <= 0) return;
+    // Every concurrent caller waits on the same promise: a burst of signals
+    // costs one re-read, not one per signal.
+    this.topologyFloorWait ??= new Promise<void>((resolve) => {
+      globalThis.setTimeout(() => {
+        this.topologyFloorWait = undefined;
+        resolve();
+      }, remaining);
+    });
+    await this.topologyFloorWait;
   }
 
   async refreshAfterWorkspaceDeleted(

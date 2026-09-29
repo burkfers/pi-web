@@ -2265,6 +2265,9 @@ export class PiWebApp extends LitElement {
   private createWorkspaceHost(): WorkspaceHost {
     return {
       requestRender: () => { this.invalidateWorkspaceSurface(); },
+      // Rate-limited by the controller, so a panel may report a difference on
+      // every poll without costing a request each time.
+      refreshWorkspaces: () => { void this.workspaces.refreshSelectedProjectTopology(); },
     };
   }
 
@@ -2890,6 +2893,9 @@ export class PiWebApp extends LitElement {
     let workspaces = this.state.workspacesByProjectId[projectId] ?? [];
     let created = workspaces.find((workspace) => workspace.path === path);
     if (created === undefined) {
+      // The run just reported success, so this re-reads now rather than waiting
+      // out the rate limit a panel-driven refresh would observe: the user
+      // created this workspace and is waiting to work in it.
       workspaces = await this.workspaces.refreshProjectWorkspaces(projectId, machineId);
       created = workspaces.find((workspace) => workspace.path === path);
     }

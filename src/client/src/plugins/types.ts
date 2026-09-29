@@ -175,9 +175,9 @@ export type PluginPeer =
       openChannel(operation: string, input: JsonValue, options: PluginPeerChannelOptions): Promise<PluginPeerChannel>;
     };
 
-export interface WorkspaceHost {
-  requestRender(): void;
-}
+import type { WorkspaceHost } from "../../../plugin-api";
+
+export type { WorkspaceHost };
 
 export interface WorkspaceContext {
   machine: PluginMachine;

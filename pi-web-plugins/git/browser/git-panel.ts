@@ -203,6 +203,7 @@ class GitUiController {
         if (!state.retained) return;
         state.status = state.status?.hash === status.hash ? state.status : status;
         state.stale = false;
+        this.reportWorkspaceLabelDrift(context, status);
         const path = state.selectedDiffPath;
         if (path !== undefined && status.files.some((file) => file.path === path)
           && this.connectedWorkspaceKey === workspaceContextKey(context)) {
@@ -227,6 +228,20 @@ class GitUiController {
     state.statusRequest = request;
     if (!background) void this.refreshActiveMode(state, context);
     return request;
+  }
+
+  /**
+   * This workspace is labelled by its branch, so a checkout that happened in a
+   * terminal makes the label in the workspace list wrong until the list is
+   * re-read. The host rate-limits the request, so this can run on every poll.
+   *
+   * Only an attached branch is compared: a detached workspace is labelled by
+   * the commit it points at, which `git status` does not report.
+   */
+  private reportWorkspaceLabelDrift(context: WorkspacePanelContext, status: GitStatusResponse): void {
+    if (!this.isOwnedWorkspace(context.workspace) || status.branch === undefined) return;
+    if (context.workspace.label === status.branch) return;
+    context.host.refreshWorkspaces?.();
   }
 
   selectDiff(context: WorkspacePanelContext, path: string): void {

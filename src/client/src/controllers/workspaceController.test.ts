@@ -74,6 +74,7 @@ function harness(
     navigateToWorkspace?: WorkspaceControllerDependencies["navigateToWorkspace"];
     beginNavigationOperation?: WorkspaceControllerDependencies["beginNavigationOperation"];
     loadSessions?: LoadSessions;
+    topologyRefreshFloorMs?: number;
     workspaceResolution?: (projectId: string, machineId?: string, options?: { signal?: AbortSignal }) => Promise<{
       status: "provider";
       projectId: string;
@@ -116,6 +117,7 @@ function harness(
       ...(options.beginNavigationOperation === undefined ? {} : { beginNavigationOperation: options.beginNavigationOperation }),
       onBackgroundError: (message, error) => { backgroundErrors.push({ message, error }); },
       topologyRefreshDebounceMs: options.topologyRefreshDebounceMs ?? 0,
+      ...(options.topologyRefreshFloorMs === undefined ? {} : { topologyRefreshFloorMs: options.topologyRefreshFloorMs }),
     },
   );
   return { controller, state: () => state, clearActiveSession, updateUrl, backgroundErrors, setState };
@@ -294,6 +296,78 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     // Absent, not stale: a provider that stops advertising creation must stop
     // the UI offering it.
     expect(test.controller.creationFor(repo.id)).toBeUndefined();
+  });
+
+  it("rate-limits rate-driven topology refreshes per project but never an immediate one", async () => {
+    vi.useFakeTimers();
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const resolution = vi.fn().mockResolvedValue({
+      status: "provider" as const,
+      projectId: repo.id,
+      workspaces: [main],
+      diagnostics: [],
+    });
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        selectedProject: repo,
+        selectedWorkspace: main,
+        workspaces: [main],
+      },
+      vi.fn().mockResolvedValue([main]),
+      { workspaceResolution: resolution, topologyRefreshFloorMs: 10_000 },
+    );
+
+    await test.controller.refreshSelectedProjectTopology();
+    expect(resolution).toHaveBeenCalledTimes(1);
+
+    // A panel noticing a difference right after must not cost a request.
+    const rateLimited = test.controller.refreshSelectedProjectTopology();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(resolution).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2);
+    await rateLimited;
+    expect(resolution).toHaveBeenCalledTimes(2);
+
+    // The user's own action does not wait out the floor.
+    await test.controller.refreshSelectedProjectTopology({ immediate: true });
+    expect(resolution).toHaveBeenCalledTimes(3);
+  });
+
+  it("collapses a burst of rate-driven refreshes into one re-read", async () => {
+    vi.useFakeTimers();
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const resolution = vi.fn().mockResolvedValue({
+      status: "provider" as const,
+      projectId: repo.id,
+      workspaces: [main],
+      diagnostics: [],
+    });
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        selectedProject: repo,
+        selectedWorkspace: main,
+        workspaces: [main],
+      },
+      vi.fn().mockResolvedValue([main]),
+      { workspaceResolution: resolution, topologyRefreshFloorMs: 10_000 },
+    );
+
+    await test.controller.refreshSelectedProjectTopology();
+    const burst = Promise.all([
+      test.controller.refreshSelectedProjectTopology(),
+      test.controller.refreshSelectedProjectTopology(),
+      test.controller.refreshSelectedProjectTopology(),
+    ]);
+    await vi.advanceTimersByTimeAsync(10_001);
+    await burst;
+
+    expect(resolution).toHaveBeenCalledTimes(2);
   });
 
   it("forgets a project's creation affordance with the project", () => {
