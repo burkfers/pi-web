@@ -71,20 +71,21 @@ describe("bundled Git workspace provider", () => {
     await expect(workspaceProvider.probe(input, new AbortController().signal)).resolves.toBe("claim");
     const workspaces = await workspaceProvider.list(input, new AbortController().signal);
 
+    const head = runGit(repository.path, ["rev-parse", "HEAD"]).trim();
     expect(workspaces).toEqual(expect.arrayContaining([
       expect.objectContaining({
         key: repository.path,
         path: repository.path,
         label: "main",
         isMain: true,
-        publicMetadata: { isGitRepo: true, isGitWorktree: true, branch: "main" },
+        publicMetadata: { isGitRepo: true, isGitWorktree: true, branch: "main", head },
       }),
       expect.objectContaining({
         key: linked,
         path: linked,
         label: "feature/with-space",
         isMain: false,
-        publicMetadata: { isGitRepo: true, isGitWorktree: true, branch: "feature/with-space" },
+        publicMetadata: { isGitRepo: true, isGitWorktree: true, branch: "feature/with-space", head },
         removal: {
           actionLabel: "Delete workspace",
           confirmation: `Delete workspace feature/with-space?\n\nThis will run git worktree remove and delete:\n${linked}\n\nThe Git branch will not be deleted.`,
@@ -93,9 +94,11 @@ describe("bundled Git workspace provider", () => {
       expect.objectContaining({
         key: detached,
         path: detached,
-        label: "detached",
+        // Two detached worktrees are indistinguishable by name alone, so the
+        // commit each points at is part of its identity.
+        label: `detached@${head.slice(0, 7)}`,
         isMain: false,
-        publicMetadata: { isGitRepo: true, isGitWorktree: true, detached: true },
+        publicMetadata: { isGitRepo: true, isGitWorktree: true, detached: true, head },
       }),
     ]));
     expect(workspaces.map(({ path }) => path)).not.toContain(gone);
@@ -224,6 +227,104 @@ describe("bundled Git workspace provider", () => {
     expect(execFile).not.toHaveBeenCalled();
   });
 
+  it("advertises creation with the repository's default branch as the base ref", async () => {
+    const repository = await createRepository("creation repo");
+    const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
+    const input = project(repository.path);
+    if (workspaceProvider.describeCreation === undefined) throw new Error("Expected a creation descriptor");
+
+    await expect(workspaceProvider.describeCreation(input, new AbortController().signal))
+      .resolves.toEqual({ actionLabel: "New worktree", defaultBaseRef: "main" });
+  });
+
+  it("plans a detached worktree at the requested base and names it after the commit it starts at", async () => {
+    const repository = await createRepository("planned creation");
+    const target = join(repository.parent, "worktrees", "repo", "review");
+    const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
+    const input = project(repository.path);
+    const source = (await workspaceProvider.list(input, new AbortController().signal)).find(({ isMain }) => isMain);
+    if (source === undefined || workspaceProvider.prepareCreate === undefined) throw new Error("Expected a source workspace");
+    const head = runGit(repository.path, ["rev-parse", "HEAD"]).trim().slice(0, 7);
+
+    const plan = await workspaceProvider.prepareCreate({
+      project: input,
+      source,
+      request: { name: "review", baseRef: "main", path: target },
+      signal: new AbortController().signal,
+    });
+
+    expect(plan).toEqual({
+      title: "Create worktree: review",
+      command: `git worktree add --detach '${target}' 'main'`,
+      path: target,
+      label: `detached@${head}`,
+      confirmation: [
+        `Create a Git worktree at ${target}?`,
+        "",
+        `It starts detached at main (${head}). Nothing is committed to a branch:`,
+        "check out a branch, or create one, when the work has a direction.",
+        "",
+        "This will run:",
+        `git worktree add --detach '${target}' 'main'`,
+      ].join("\n"),
+    });
+  });
+
+  it("refuses a creation whose base ref does not resolve or whose path is taken", async () => {
+    const repository = await createRepository("refused creation");
+    const taken = join(repository.parent, "already here");
+    await mkdir(taken, { recursive: true });
+    const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
+    const input = project(repository.path);
+    const source = (await workspaceProvider.list(input, new AbortController().signal)).find(({ isMain }) => isMain);
+    const prepareCreate = workspaceProvider.prepareCreate?.bind(workspaceProvider);
+    if (source === undefined || prepareCreate === undefined) throw new Error("Expected a creation planner");
+    const create = (baseRef: string, path: string) => prepareCreate({
+      project: input,
+      source,
+      request: { name: "review", baseRef, path },
+      signal: new AbortController().signal,
+    });
+
+    await expect(create("no-such-ref", join(repository.parent, "worktrees", "repo", "missing")))
+      .rejects.toThrow("no-such-ref does not resolve to a commit");
+    await expect(create("main", taken)).rejects.toThrow(`A file or directory already exists at ${taken}`);
+  });
+
+  it("warns in the removal confirmation about commits a detached worktree alone holds", async () => {
+    const repository = await createRepository("unanchored removal");
+    const detached = join(repository.parent, "detached removal");
+    runGit(repository.path, ["worktree", "add", "--detach", detached]);
+    await writeFile(join(detached, "tracked.txt"), "work\n", "utf8");
+    runGit(detached, ["add", "."]);
+    commit(detached, "work with no branch");
+    const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
+    const input = project(repository.path);
+
+    const target = (await workspaceProvider.list(input, new AbortController().signal)).find(({ path }) => path === detached);
+
+    // The warning belongs in the confirmation the user reads, which the host
+    // binds to this exact presentation before the removal can run.
+    expect(target?.removal?.confirmation).toContain("1 commit that no branch points at");
+    expect(target?.removal?.confirmation).toContain("Deleting it deletes them");
+    expect(target?.removal?.confirmation).toContain(`git worktree remove and delete:\n${detached}`);
+  });
+
+  it("leaves a clean detached worktree's removal confirmation without a loss warning", async () => {
+    const repository = await createRepository("clean detached removal repo");
+    const detached = join(repository.parent, "clean detached worktree");
+    runGit(repository.path, ["worktree", "add", "--detach", detached]);
+    const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
+    const input = project(repository.path);
+
+    const target = (await workspaceProvider.list(input, new AbortController().signal)).find(({ path }) => path === detached);
+
+    if (target === undefined) throw new Error("Expected a listed detached worktree");
+    expect(target.removal?.confirmation).toBe(
+      `Delete workspace ${target.label}?\n\nThis will run git worktree remove and delete:\n${detached}\n\nThe Git branch will not be deleted.`,
+    );
+  });
+
   it("performs live Git validation and builds the quoted native removal command", async () => {
     const repository = await createRepository("removal repo");
     const linked = join(repository.parent, "feature's worktree");
@@ -343,7 +444,7 @@ describe("bundled Git workspace provider", () => {
 });
 
 describe("parseGitWorktreeList", () => {
-  it("parses NUL-delimited paths without losing spaces and records detached/prunable facts", () => {
+  it("parses NUL-delimited paths without losing spaces and records head/detached/prunable facts", () => {
     const output = [
       "worktree /repo with spaces", "HEAD abc", "branch refs/heads/main", "",
       "worktree /linked detached", "HEAD def", "detached", "",
@@ -351,9 +452,9 @@ describe("parseGitWorktreeList", () => {
     ].join("\0");
 
     expect(parseGitWorktreeList(output)).toEqual([
-      { path: "/repo with spaces", branch: "main" },
-      { path: "/linked detached", detached: true },
-      { path: "/gone", branch: "gone", prunable: true },
+      { path: "/repo with spaces", head: "abc", branch: "main" },
+      { path: "/linked detached", head: "def", detached: true },
+      { path: "/gone", head: "fed", branch: "gone", prunable: true },
     ]);
   });
 

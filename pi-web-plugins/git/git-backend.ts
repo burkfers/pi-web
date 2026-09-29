@@ -119,7 +119,17 @@ async function gitStatusWithRunner(runGit: RunGit, cwd: string): Promise<GitStat
   const result = await runGit(cwd, ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"]);
   if (result.code !== 0) return { isGitRepo: false, hash: hash(result.stdout + result.stderr), files: [], submodules: [] };
   const parsed = parseStatus(result.stdout, { deferSubmodules: true });
-  return expandSubmodules(runGit, cwd, parsed, result.stdout);
+  // A detached checkout can hold work nothing else reaches, so count what would
+  // be lost with it. Branch-based workspaces cannot, and skip the extra call.
+  const unanchored = parsed.branch === undefined ? await countUnanchoredCommits(runGit, cwd) : undefined;
+  return expandSubmodules(runGit, cwd, parsed, result.stdout, unanchored);
+}
+
+async function countUnanchoredCommits(runGit: RunGit, cwd: string): Promise<number | undefined> {
+  const result = await runGit(cwd, ["rev-list", "--count", "HEAD", "--not", "--branches"]);
+  if (result.code !== 0) return undefined;
+  const count = Number.parseInt(result.stdout.trim(), 10);
+  return Number.isInteger(count) ? count : undefined;
 }
 
 /**
@@ -129,7 +139,13 @@ async function gitStatusWithRunner(runGit: RunGit, cwd: string): Promise<GitStat
  * entries under `<submodule>/<inner path>`. A plain `-dirty` pointer (commit
  * unchanged) is intentionally not surfaced as a pointer entry.
  */
-async function expandSubmodules(runGit: RunGit, cwd: string, parsed: ParsedStatus, topRaw: string): Promise<GitStatusResponse> {
+async function expandSubmodules(
+  runGit: RunGit,
+  cwd: string,
+  parsed: ParsedStatus,
+  topRaw: string,
+  unanchoredCommits: number | undefined,
+): Promise<GitStatusResponse> {
   // Fan out concurrently — one `git status` per dirty submodule plus one
   // `git rev-parse` per unstaged pointer move — then concatenate in input
   // order so the file list and hash are identical to a serial pass.
@@ -157,6 +173,7 @@ async function expandSubmodules(runGit: RunGit, cwd: string, parsed: ParsedStatu
     ...(parsed.upstream === undefined ? {} : { upstream: parsed.upstream }),
     ...(parsed.ahead === undefined ? {} : { ahead: parsed.ahead }),
     ...(parsed.behind === undefined ? {} : { behind: parsed.behind }),
+    ...(unanchoredCommits === undefined ? {} : { unanchoredCommits }),
     files,
     submodules: dirtySubmodulePaths,
   };
@@ -685,6 +702,7 @@ function statusPeerResponse(status: GitStatusResponse): JsonValue {
     ...(status.upstream === undefined ? {} : { upstream: status.upstream }),
     ...(status.ahead === undefined ? {} : { ahead: status.ahead }),
     ...(status.behind === undefined ? {} : { behind: status.behind }),
+    ...(status.unanchoredCommits === undefined ? {} : { unanchoredCommits: status.unanchoredCommits }),
     files: status.files.map((file) => ({
       path: file.path,
       ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),

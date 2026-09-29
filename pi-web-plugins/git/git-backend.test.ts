@@ -508,10 +508,13 @@ async function mappedSubmoduleStatus(fixture: { top: string; gitlink?: string; i
   const dir = mkdtempSync(join(tmpdir(), "pi-web-status-map-"));
   created.push(dir);
   const path = fixture.path ?? "HARL";
+  // These fixtures cover submodule mapping, not detached state, so they are
+  // branch checkouts: a detached one also asks how many commits are unanchored.
+  const onBranch = fixture.top.startsWith("# branch.head") ? fixture.top : `# branch.head main\0${fixture.top}`;
   const responses = [{
     cwd: dir,
     args: ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"],
-    stdout: fixture.top,
+    stdout: onBranch,
   }];
   if (fixture.gitlink !== undefined) {
     mkdirSync(join(dir, path));

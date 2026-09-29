@@ -1,12 +1,16 @@
+import { stat } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import type {
   PiWebServerPlugin,
   ProjectInput,
   ProviderClaim,
+  ProviderCreateContext,
+  ProviderCreationDescriptor,
   ProviderRemoveContext,
   ProviderWorkspace,
   ServerPluginActivationContext,
   ServerPluginExecFileResult,
+  WorkspaceCreatePlan,
   WorkspaceProvider,
   WorkspaceRemovePlan,
 } from "@jmfederico/pi-web/server-plugin-api";
@@ -27,6 +31,8 @@ interface GitWorktreeInfo {
   path: string;
   branch?: string;
   bare?: boolean;
+  /** Commit the worktree's HEAD points at, as reported by `git worktree list`. */
+  head?: string;
   detached?: boolean;
   prunable?: boolean;
 }
@@ -90,8 +96,14 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
         .filter(({ worktree, path, isMain }) => worktree.prunable !== true || isMain || path === project.path);
       if (selectable.length === 0) return [singleGitWorkspace(project)];
 
+      const removalPresentations = new Map<string, ProviderWorkspace["removal"]>();
+      for (const { worktree, path, isMain } of selectable) {
+        if (isMain) continue;
+        removalPresentations.set(path, await removalPresentation(context, worktree, path, worktreeLabel(worktree, path), signal));
+      }
+
       return selectable.map(({ worktree, path, isMain }) => {
-        const label = worktree.branch ?? (worktree.detached === true ? "detached" : basename(worktree.path) || worktree.path);
+        const label = worktreeLabel(worktree, path);
         return {
           key: path,
           path,
@@ -106,10 +118,42 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
             isGitWorktree: true,
             ...(worktree.branch === undefined ? {} : { branch: worktree.branch }),
             ...(worktree.detached === undefined ? {} : { detached: worktree.detached }),
+            ...(worktree.head === undefined ? {} : { head: worktree.head }),
           },
-          ...(isMain ? {} : { removal: gitRemovalPresentation(label, path) }),
+          ...(isMain ? {} : { removal: removalPresentations.get(path) ?? gitRemovalPresentation(label, path) }),
         };
       });
+    },
+    async describeCreation(project: ProjectInput, signal: AbortSignal): Promise<ProviderCreationDescriptor> {
+      return { actionLabel: "New worktree", defaultBaseRef: await resolveDefaultBaseRef(context, project.path, signal) };
+    },
+    async prepareCreate({ source, request, signal }: ProviderCreateContext): Promise<WorkspaceCreatePlan> {
+      const path = resolve(request.path);
+      if (await pathExists(path)) {
+        throw new Error(`A file or directory already exists at ${path}`);
+      }
+      const resolved = await runGit(context, source.path, ["rev-parse", "--verify", "--quiet", `${request.baseRef}^{commit}`], signal);
+      if (resolved.signal !== null) throw new Error(`git rev-parse ended from signal ${resolved.signal}`);
+      if (resolved.exitCode !== 0 || resolved.stdout.trim() === "") {
+        throw new Error(`${request.baseRef} does not resolve to a commit`);
+      }
+      const shortHead = resolved.stdout.trim().slice(0, 7);
+      const command = `git worktree add --detach ${shellQuote(path)} ${shellQuote(request.baseRef)}`;
+      return {
+        title: `Create worktree: ${basename(path) || path}`,
+        command,
+        path,
+        label: `detached@${shortHead}`,
+        confirmation: [
+          `Create a Git worktree at ${path}?`,
+          "",
+          `It starts detached at ${request.baseRef} (${shortHead}). Nothing is committed to a branch:`,
+          "check out a branch, or create one, when the work has a direction.",
+          "",
+          "This will run:",
+          command,
+        ].join("\n"),
+      };
     },
     async prepareRemove({ project, workspace, signal }: ProviderRemoveContext): Promise<WorkspaceRemovePlan> {
       const privatePath = gitPrivateWorktreePath(workspace);
@@ -134,6 +178,76 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
   });
 }
 
+/**
+ * Removal wording for one linked worktree. A detached worktree can hold commits
+ * no branch points at, and deleting the worktree takes its reflog with them, so
+ * the confirmation says so while the user is still choosing: this text is what
+ * the host binds the confirmation to, and the plan runs after it is confirmed.
+ */
+async function removalPresentation(
+  context: ServerPluginActivationContext,
+  worktree: GitWorktreeInfo,
+  path: string,
+  label: string,
+  signal: AbortSignal,
+): Promise<NonNullable<ProviderWorkspace["removal"]>> {
+  const unanchored = worktree.detached === true && path !== ""
+    ? await countUnanchoredCommits(context, path, signal)
+    : 0;
+  if (unanchored === 0) return gitRemovalPresentation(label, path);
+  const commits = `${String(unanchored)} commit${unanchored === 1 ? "" : "s"}`;
+  return {
+    actionLabel: "Delete workspace",
+    confirmation: [
+      `Delete workspace ${label}?`,
+      "",
+      "This will run git worktree remove and delete:",
+      path,
+      "",
+      `This worktree is detached and holds ${commits} that no branch points at.`,
+      "Deleting it deletes them: nothing else reaches them, and this worktree's",
+      "reflog goes with it.",
+      "",
+      "The Git branch will not be deleted.",
+    ].join("\n"),
+  };
+}
+
+async function countUnanchoredCommits(
+  context: ServerPluginActivationContext,
+  worktreePath: string,
+  signal: AbortSignal,
+): Promise<number> {
+  const result = await runGit(context, worktreePath, ["rev-list", "--count", "HEAD", "--not", "--branches"], signal);
+  const count = result.exitCode === 0 ? Number.parseInt(result.stdout.trim(), 10) : Number.NaN;
+  return Number.isInteger(count) && count > 0 ? count : 0;
+}
+
+/**
+ * The base ref a new worktree starts from: the remote's default branch when the
+ * repository records one, else the current branch of the checkout the project
+ * is registered at, else `HEAD`.
+ */
+async function resolveDefaultBaseRef(
+  context: ServerPluginActivationContext,
+  projectPath: string,
+  signal: AbortSignal,
+): Promise<string> {
+  const remoteHead = await runGit(context, projectPath, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], signal);
+  const remote = remoteHead.exitCode === 0 ? remoteHead.stdout.trim() : "";
+  if (remote !== "") {
+    const branch = remote.includes("/") ? remote.slice(remote.indexOf("/") + 1) : remote;
+    if (branch !== "") return branch;
+  }
+  const current = await runGit(context, projectPath, ["symbolic-ref", "--quiet", "--short", "HEAD"], signal);
+  const branch = current.exitCode === 0 ? current.stdout.trim() : "";
+  return branch === "" ? "HEAD" : branch;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  return await stat(path).then(() => true, () => false);
+}
+
 /** Parse `git worktree list --porcelain -z` without path quoting or space loss. */
 export function parseGitWorktreeList(stdout: string): GitWorktreeInfo[] {
   return stdout.split("\0\0").flatMap((record) => {
@@ -145,6 +259,7 @@ export function parseGitWorktreeList(stdout: string): GitWorktreeInfo[] {
       const value = separator === -1 ? "" : field.slice(separator + 1);
       if (key === "worktree") info.path = value;
       else if (key === "branch") info.branch = value.replace(/^refs\/heads\//u, "");
+      else if (key === "HEAD") info.head = value;
       else if (key === "bare") info.bare = true;
       else if (key === "detached") info.detached = true;
       else if (key === "prunable") info.prunable = true;
@@ -179,6 +294,20 @@ function gitPrivateWorktreePath(workspace: ProviderWorkspace): string {
   const path: unknown = Reflect.get(data, "worktreePath");
   if (typeof path !== "string" || path === "") throw new Error("Git worktree path is unavailable for removal");
   return path;
+}
+
+/**
+ * A detached worktree has no branch to name it, and "detached" alone cannot
+ * tell two of them apart in a list, so the commit it points at is part of its
+ * identity. Every surface that names a worktree uses this one label.
+ */
+function worktreeLabel(worktree: GitWorktreeInfo, path: string): string {
+  return worktree.branch
+    ?? (worktree.detached === true ? `detached@${shortOid(worktree.head)}` : basename(path) || path);
+}
+
+function shortOid(head: string | undefined): string {
+  return head === undefined || head === "" ? "unknown" : head.slice(0, 7);
 }
 
 function shellQuote(value: string): string {

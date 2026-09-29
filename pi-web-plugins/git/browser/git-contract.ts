@@ -22,6 +22,8 @@ export interface GitStatusResponse {
   upstream?: string;
   ahead?: number;
   behind?: number;
+  /** Commits reachable from HEAD that no local branch points at; detached checkouts only. */
+  unanchoredCommits?: number;
   files: GitStatusFile[];
   submodules: string[];
 }
@@ -94,6 +96,7 @@ export function parseGitStatusResponse(value: unknown): GitStatusResponse {
   const upstream = optionalString(record, "upstream");
   const ahead = optionalNumber(record, "ahead");
   const behind = optionalNumber(record, "behind");
+  const unanchoredCommits = optionalNumber(record, "unanchoredCommits");
   return {
     isGitRepo: requireBoolean(record, "isGitRepo"),
     hash: requireString(record, "hash"),
@@ -101,6 +104,7 @@ export function parseGitStatusResponse(value: unknown): GitStatusResponse {
     ...(upstream === undefined ? {} : { upstream }),
     ...(ahead === undefined ? {} : { ahead }),
     ...(behind === undefined ? {} : { behind }),
+    ...(unanchoredCommits === undefined ? {} : { unanchoredCommits: requireNonNegativeNumber(record, "unanchoredCommits") }),
     files: requireArray(record, "files").map(parseGitStatusFile),
     submodules: record["submodules"] === undefined ? [] : requireStringArray(record["submodules"], "submodules"),
   };
@@ -248,6 +252,12 @@ function requireString(record: Record<string, unknown>, key: string): string {
 function requireBoolean(record: Record<string, unknown>, key: string): boolean {
   const value = record[key];
   if (typeof value !== "boolean") throw new Error(`Expected boolean field: ${key}`);
+  return value;
+}
+
+function requireNonNegativeNumber(record: Record<string, unknown>, key: string): number {
+  const value = requireNumber(record, key);
+  if (!Number.isInteger(value)) throw new Error(`Expected integer field: ${key}`);
   return value;
 }
 

@@ -1084,7 +1084,14 @@ function gitSummary(status: GitStatusResponse): string {
   const branch = status.branch ?? "detached";
   const ahead = status.ahead ?? 0;
   const behind = status.behind ?? 0;
-  return ahead === 0 && behind === 0 ? branch : `${branch} · ↑${String(ahead)} ↓${String(behind)}`;
+  const tracking = ahead === 0 && behind === 0 ? "" : ` · ↑${String(ahead)} ↓${String(behind)}`;
+  return `${branch}${tracking}${unanchoredSummary(status.unanchoredCommits)}`;
+}
+
+/** Work a detached checkout holds that no branch points at, and that dies with it. */
+function unanchoredSummary(count: number | undefined): string {
+  if (count === undefined || count === 0) return "";
+  return ` · ${String(count)} commit${count === 1 ? "" : "s"} not on any branch`;
 }
 
 function stateLabel(index: string, workingTree: string): string {
