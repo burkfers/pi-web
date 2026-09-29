@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
-import type { SessionWorktreeOwnership } from "../../shared/apiTypes.js";
+import type { SessionDetachment, SessionWorktreeOwnership } from "../../shared/apiTypes.js";
 
 /**
  * PI WEB's own namespaced block in the session file header.
@@ -11,6 +11,18 @@ import type { SessionWorktreeOwnership } from "../../shared/apiTypes.js";
  * header is preserved; only PI WEB's own key is ever changed.
  */
 const PI_WEB_HEADER_KEY = "piWeb";
+
+/** Read the detachment note from a parsed session header record. */
+export function sessionDetachmentFromHeader(header: unknown): SessionDetachment | undefined {
+  if (!isRecord(header)) return undefined;
+  const piWeb = header[PI_WEB_HEADER_KEY];
+  if (!isRecord(piWeb)) return undefined;
+  const detachedFrom = piWeb["detachedFrom"];
+  const detachedAt = piWeb["detachedAt"];
+  if (typeof detachedFrom !== "string" || detachedFrom === "") return undefined;
+  if (typeof detachedAt !== "string" || detachedAt === "") return undefined;
+  return { detachedFrom, detachedAt };
+}
 
 /** Read the worktree-ownership fact from a parsed session header record. */
 export function sessionWorktreeOwnershipFromHeader(header: unknown): SessionWorktreeOwnership | undefined {
@@ -90,6 +102,24 @@ export async function recordSessionWorktreeOwnership(
   await rewriteSessionHeader(sessionFile, (header) => setWorktreeOwnership(header, ownership));
 }
 
+/**
+ * Record the branch a parked session's worktree was released from. Each new
+ * detachment replaces the last, because only the most recent one describes the
+ * state the worktree is actually in.
+ */
+export async function recordSessionDetachment(sessionFile: string, detachment: SessionDetachment): Promise<void> {
+  await rewriteSessionHeader(sessionFile, (header) => {
+    const existing = sessionDetachmentFromHeader(header);
+    if (existing === undefined) { /* first detachment for this session */ }
+    else if (existing.detachedFrom === detachment.detachedFrom && existing.detachedAt === detachment.detachedAt) return false;
+    const piWeb = isRecord(header[PI_WEB_HEADER_KEY]) ? { ...header[PI_WEB_HEADER_KEY] } : {};
+    piWeb["detachedFrom"] = detachment.detachedFrom;
+    piWeb["detachedAt"] = detachment.detachedAt;
+    header[PI_WEB_HEADER_KEY] = piWeb;
+    return true;
+  });
+}
+
 /** Same record, applied to a live runtime's in-memory header. */
 export function patchSessionWorktreeOwnershipHeader(
   getHeader: (() => Record<string, unknown> | null | undefined) | undefined,
@@ -98,6 +128,19 @@ export function patchSessionWorktreeOwnershipHeader(
   const header = getHeader?.();
   if (header === undefined || header === null) return;
   setWorktreeOwnership(header, ownership);
+}
+
+/** Same detachment record, applied to a live runtime's in-memory header. */
+export function patchSessionDetachmentHeader(
+  getHeader: (() => Record<string, unknown> | null | undefined) | undefined,
+  detachment: SessionDetachment,
+): void {
+  const header = getHeader?.();
+  if (header === undefined || header === null) return;
+  const piWeb = isRecord(header[PI_WEB_HEADER_KEY]) ? { ...header[PI_WEB_HEADER_KEY] } : {};
+  piWeb["detachedFrom"] = detachment.detachedFrom;
+  piWeb["detachedAt"] = detachment.detachedAt;
+  header[PI_WEB_HEADER_KEY] = piWeb;
 }
 
 function setWorktreeOwnership(header: Record<string, unknown>, ownership: SessionWorktreeOwnership): boolean {

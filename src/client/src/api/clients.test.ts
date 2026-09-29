@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PiWebConfigValues, TerminalCommandRun, Workspace } from "../../../shared/apiTypes";
+import type { PiWebConfigValues, Workspace } from "../../../shared/apiTypes";
 import { configApi, filesApi, machinesApi, noticesApi, piPackagesApi, piWebApi, pluginsApi, SessionTreeForkUnavailableError, sessionsApi, workspacesApi } from "./clients";
 
 const workspace: Workspace = {
@@ -24,19 +24,6 @@ function piWebStatusResponse() {
     messages: [],
   };
 }
-
-const commandRun: TerminalCommandRun = {
-  id: "run1",
-  origin: "core",
-  projectId: workspace.projectId,
-  workspaceId: workspace.id,
-  terminalId: "t1",
-  title: "Build",
-  command: "npm test",
-  status: "running",
-  createdAt: "2026-05-25T00:00:00.000Z",
-  metadata: {},
-};
 
 beforeEach(() => {
   vi.stubGlobal("document", { baseURI: "https://pi.example.test/" });
@@ -530,9 +517,11 @@ describe("machine-scoped workspace API", () => {
 
 describe("machine-scoped workspace removal API", () => {
   it("deletes workspaces through the selected machine scope with the confirmed host precondition", async () => {
-    const fetchMock = stubJsonFetch(commandRun);
+    const fetchMock = stubJsonFetch({ removed: true });
 
-    await workspacesApi.deleteWorkspace("p 1", "w/1", "v1.confirmed", "remote a");
+    // The request resolves only once the worktree is gone, so the answer is
+    // the fact rather than a run to watch afterwards.
+    await expect(workspacesApi.deleteWorkspace("p 1", "w/1", "v1.confirmed", "remote a")).resolves.toEqual({ removed: true });
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchCall(fetchMock, 0);
@@ -541,6 +530,13 @@ describe("machine-scoped workspace removal API", () => {
     expect(init?.body).toBe(JSON.stringify({ precondition: "v1.confirmed" }));
   });
 
+  it("refuses to read a removal response that does not report a removal", async () => {
+    // A gateway answering with something else must not be read as success: the
+    // caller would clear the row for a worktree that is still there.
+    stubJsonFetch({ status: "queued" });
+
+    await expect(workspacesApi.deleteWorkspace("p 1", "w/1", "v1.confirmed", "remote a")).rejects.toThrow("Expected a completed workspace removal");
+  });
 });
 
 describe("workspace file read API", () => {

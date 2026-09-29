@@ -14,6 +14,7 @@ import type {
   ServerPluginPeerRequestContext,
   ProjectInput,
   ProviderCreateContext,
+  ProviderDetachContext,
   ProviderRemoveContext,
   ServerPluginActivation,
   ServerPluginActivationContext,
@@ -1370,6 +1371,7 @@ function snapshotWorkspaceProvider(value: unknown): WorkspaceProvider {
     describeCreation: value["describeCreation"],
     prepareCreate: value["prepareCreate"],
     prepareRemove: value["prepareRemove"],
+    detach: value["detach"],
   };
   if (!isWorkspaceProvider(candidate)) throw new IncompatibleServerPluginError("Server plugin workspaceProvider is invalid");
   const probe = candidate.probe.bind(value);
@@ -1377,6 +1379,7 @@ function snapshotWorkspaceProvider(value: unknown): WorkspaceProvider {
   const describeCreation = candidate.describeCreation?.bind(value);
   const prepareCreate = candidate.prepareCreate?.bind(value);
   const prepareRemove = candidate.prepareRemove?.bind(value);
+  const detach = candidate.detach?.bind(value);
   return Object.freeze({
     ...(candidate.fallback === undefined ? {} : { fallback: candidate.fallback }),
     probe: (project: ProjectInput, signal: AbortSignal) => probe(project, signal),
@@ -1388,6 +1391,7 @@ function snapshotWorkspaceProvider(value: unknown): WorkspaceProvider {
       ? {}
       : { prepareCreate: (context: ProviderCreateContext) => prepareCreate(context) }),
     ...(prepareRemove === undefined ? {} : { prepareRemove: (context: ProviderRemoveContext) => prepareRemove(context) }),
+    ...(detach === undefined ? {} : { detach: (context: ProviderDetachContext) => detach(context) }),
   });
 }
 
@@ -1399,12 +1403,14 @@ function isWorkspaceProvider(value: unknown): value is WorkspaceProvider {
   const describeCreation = value["describeCreation"];
   const prepareCreate = value["prepareCreate"];
   const prepareRemove = value["prepareRemove"];
+  const detach = value["detach"];
   return (fallback === undefined || typeof fallback === "boolean")
     && typeof probe === "function"
     && typeof list === "function"
     && (describeCreation === undefined || typeof describeCreation === "function")
     && (prepareCreate === undefined || typeof prepareCreate === "function")
-    && (prepareRemove === undefined || typeof prepareRemove === "function");
+    && (prepareRemove === undefined || typeof prepareRemove === "function")
+    && (detach === undefined || typeof detach === "function");
 }
 
 function parseHealth(value: unknown): ServerPluginHealth {

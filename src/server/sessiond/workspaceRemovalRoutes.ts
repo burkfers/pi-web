@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import type { TerminalCommandRun } from "../../shared/apiTypes.js";
 import {
   parseWorkspaceRemovalRequest,
   WORKSPACE_REMOVAL_REQUEST_BODY_MAX_BYTES,
@@ -18,7 +17,7 @@ export interface WorkspaceRemover {
     workspaceId: string,
     precondition: string,
     signal: AbortSignal,
-  ): Promise<TerminalCommandRun>;
+  ): Promise<void>;
 }
 
 export interface WorkspaceRemovalRouteDependencies {
@@ -59,7 +58,7 @@ export function registerWorkspaceRemovalRoutes(
 
       const cancellation = requestCancellation(request, reply);
       try {
-        return await dependencies.removals.remove(
+        await dependencies.removals.remove(
           project,
           request.params.workspaceId,
           precondition,
@@ -71,9 +70,15 @@ export function registerWorkspaceRemovalRoutes(
         dependencies.onWorkspacesMutated();
         cancellation.dispose();
       }
+      // The worktree is gone by the time this returns, so there is no run to
+      // hand back — just the fact that the thing the user asked for happened.
+      return WORKSPACE_REMOVAL_RESULT;
     },
   );
 }
+
+/** What a completed removal answers with: it happened, and there is nothing to watch. */
+export const WORKSPACE_REMOVAL_RESULT: Readonly<{ removed: true }> = Object.freeze({ removed: true as const });
 
 function removalRequestFailed(reply: FastifyReply, error: unknown): FastifyReply {
   return reply.code(workspaceRemovalHttpStatus(error)).send({ error: errorMessage(error) });

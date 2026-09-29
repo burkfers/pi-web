@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, parse, relative, resolve, sep } from "node:path";
 import type { ProviderCreateRequest } from "../../server-plugin-api.js";
-import type { TerminalCommandRun, WorkspaceCreationPreview } from "../../shared/apiTypes.js";
-import { workspaceCreateOperation, workspaceCreationMetadata } from "../../shared/workspaceCreation.js";
+import type { WorkspaceCreationPreview } from "../../shared/apiTypes.js";
+import { workspaceCreateOperation } from "../../shared/workspaceCreation.js";
 import { WORKSPACE_CREATION_OPERATION_TIMEOUT_MS } from "../../shared/workspaceCreationProtocol.js";
 import type { Project } from "../types.js";
-import type { RunTerminalCommandOptions } from "../terminals/requiredTerminalService.js";
+import { quietCommandFailureDetail, runQuietCommand, type QuietCommandOptions, type QuietCommandResult } from "../terminals/quietCommand.js";
+
+/** The one capability creation needs from the outside world: run a command. */
+export type QuietCommandRunner = (options: QuietCommandOptions) => Promise<QuietCommandResult>;
 import type { ServerNoticeCreator } from "../notices/serverNoticeService.js";
 import {
   WorkspaceProviderCreationError,
@@ -19,10 +22,6 @@ export interface WorkspaceCreationProvider {
     request: ProviderCreateRequest,
     signal: AbortSignal,
   ): Promise<WorkspaceProviderCreationTarget>;
-}
-
-export interface WorkspaceCreationTerminalHost {
-  runCommand(options: RunTerminalCommandOptions): TerminalCommandRun;
 }
 
 /**
@@ -43,6 +42,8 @@ export interface WorkspaceCreationServiceOptions {
   timeoutMs?: number;
   /** Records creation failures before the request reports them. */
   notices?: Pick<ServerNoticeCreator, "record">;
+  /** Runs the planned command; replaced in tests, real by default. */
+  runCommand?: QuietCommandRunner;
   /**
    * Where a request that named no path of its own puts its worktree. Injected
    * so the configured root and the derived fallback are the caller's decision,
@@ -53,7 +54,7 @@ export interface WorkspaceCreationServiceOptions {
 
 interface WorkspaceCreationFlight {
   controller: AbortController;
-  promise: Promise<TerminalCommandRun>;
+  promise: Promise<{ path: string }>;
   waiters: number;
   settled: boolean;
 }
@@ -80,6 +81,7 @@ interface PlannedCreation {
 export class WorkspaceCreationService {
   private readonly timeoutMs: number;
   private readonly notices: Pick<ServerNoticeCreator, "record"> | undefined;
+  private readonly runCommand: QuietCommandRunner;
   private readonly worktreeDirectory: (projectPath: string) => string | Promise<string>;
   private readonly flights = new Map<string, WorkspaceCreationFlight>();
   private readonly shutdown = new AbortController();
@@ -87,11 +89,11 @@ export class WorkspaceCreationService {
 
   constructor(
     private readonly providers: WorkspaceCreationProvider,
-    private readonly terminals: WorkspaceCreationTerminalHost,
     options: WorkspaceCreationServiceOptions = {},
   ) {
     this.timeoutMs = options.timeoutMs ?? WORKSPACE_CREATION_OPERATION_TIMEOUT_MS;
     this.notices = options.notices;
+    this.runCommand = options.runCommand ?? runQuietCommand;
     this.worktreeDirectory = options.worktreeDirectory ?? ((projectPath) => derivedWorktreeDirectory(projectPath));
   }
 
@@ -123,16 +125,21 @@ export class WorkspaceCreationService {
   }
 
   /**
-   * Run a previously previewed creation. The confirmation is re-derived from a
-   * fresh plan, so a repository that moved between preview and confirmation
-   * fails with a stale-confirmation error instead of running a different plan.
+   * Run a previously previewed creation, and resolve when the worktree exists.
+   *
+   * The confirmation is re-derived from a fresh plan, so a repository that moved
+   * between preview and confirmation fails with a stale-confirmation error
+   * instead of running a different plan. The command is run here rather than in
+   * a terminal: the plan was already shown before the user confirmed, and this
+   * returns only once the worktree is really there — a session cannot record a
+   * working directory that does not exist.
    */
   async create(
     project: Project,
     request: ProviderCreationRequest,
     precondition: string,
     signal?: AbortSignal,
-  ): Promise<TerminalCommandRun> {
+  ): Promise<{ path: string }> {
     throwIfAborted(this.shutdown.signal);
     throwIfAborted(signal);
 
@@ -171,7 +178,7 @@ export class WorkspaceCreationService {
     request: ProviderCreationRequest,
     precondition: string,
     flightSignal: AbortSignal,
-  ): Promise<TerminalCommandRun> {
+  ): Promise<{ path: string }> {
     try {
       return await runBoundedCreation(this.timeoutMs, flightSignal, async (signal) => {
         const planned = await this.resolvePlan(project, request, signal);
@@ -183,26 +190,35 @@ export class WorkspaceCreationService {
         }
         throwIfAborted(signal);
 
+        // Run and wait, quietly. Creating a worktree is something the user
+        // asked for by clicking the thing that means it, so there is no second
+        // artifact on screen to watch; the plan was already shown in full before
+        // they confirmed, and a failure is reported with what the command said.
+        let result: QuietCommandResult;
         try {
-          return this.terminals.runCommand({
-            origin: "core",
-            projectId: project.id,
-            workspaceId: planned.target.source.id,
-            cwd: planned.target.source.path,
-            title: planned.plan.title,
+          result = await this.runCommand({
             command: planned.plan.command,
-            metadata: workspaceCreationMetadata(planned.preview),
-            failureNotice: {
-              message: "Workspace creation failed. See terminal output.",
-              context: { targetWorkspacePath: planned.preview.path },
-            },          });
+            cwd: planned.target.source.path,
+            signal,
+          });
         } catch (error) {
+          // The command never started, which is a different thing from a command
+          // that started and failed.
           throw new WorkspaceCreationError(
-            `Failed to start workspace creation: ${errorMessage(error)}`,
+            `Failed to run workspace creation: ${errorMessage(error)}`,
             400,
             { cause: error },
           );
         }
+        if (result.exitCode !== 0) {
+          const detail = quietCommandFailureDetail(result);
+          throw new WorkspaceCreationError(
+            `Workspace creation failed: ${detail ?? `the command exited with code ${String(result.exitCode)}`}`,
+            409,
+          );
+        }
+        // The path the command actually used, which is the one that now exists.
+        return { path: planned.preview.path };
       });
     } catch (error) {
       const failure = error instanceof WorkspaceCreationDeadlineError
@@ -243,7 +259,7 @@ export class WorkspaceCreationService {
     });
   }
 
-  private waitForFlight(flight: WorkspaceCreationFlight, signal?: AbortSignal): Promise<TerminalCommandRun> {
+  private waitForFlight(flight: WorkspaceCreationFlight, signal?: AbortSignal): Promise<{ path: string }> {
     throwIfAborted(signal);
     flight.waiters += 1;
 

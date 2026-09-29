@@ -357,7 +357,31 @@ export interface WorkspaceProvider {
    */
   prepareCreate?(context: ProviderCreateContext): Promise<WorkspaceCreatePlan>;
   prepareRemove?(context: ProviderRemoveContext): Promise<WorkspaceRemovePlan>;
+  /**
+   * Release a workspace from whatever it is attached to, in place, and report
+   * what it left behind.
+   *
+   * The host calls this when it parks a session and wants its worktree to stop
+   * holding a branch hostage, so it must complete before returning: the answer
+   * is what the host records and later tells the resuming agent about.
+   */
+  detach?(context: ProviderDetachContext): Promise<ProviderDetachResult>;
 }
+
+export interface ProviderDetachContext {
+  readonly project: ProjectInput;
+  /** The workspace to detach, as the host resolved it. */
+  readonly workspace: Readonly<ProviderWorkspace>;
+  readonly signal: AbortSignal;
+}
+
+export type ProviderDetachResult =
+  /** The workspace was attached to a branch, which it no longer is. */
+  | { readonly detached: true; readonly branch: string; readonly head: string }
+  /** Nothing to release: the workspace was already detached. */
+  | { readonly detached: false; readonly head?: string }
+  /** The provider cannot detach this kind of workspace. */
+  | { readonly detached: false; readonly unsupported: true };
 
 export type ProviderClaim = "claim" | "pass";
 

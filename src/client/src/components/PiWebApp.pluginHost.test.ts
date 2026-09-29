@@ -6,7 +6,7 @@ import { TerminalBrowserRuntime } from "../../../../pi-web-plugins/terminal/Term
 import { TERMINAL_BROWSER_FACADE_CAPABILITY, TerminalFacade, type RequiredTerminalBrowserFacadeV1, type RequiredTerminalWorkspaceBindingV1 } from "../../../../pi-web-plugins/terminal/TerminalFacade";
 import { InMemoryTerminalSelectionMemory } from "../../../../pi-web-plugins/terminal/terminalSelection";
 import type { WorkspaceFilesCapabilityV1, WorkspacePanelContext as PublicWorkspacePanelContext } from "../../../plugin-api";
-import type { Machine, Project, SessionInfo, TerminalCommandRun, Workspace } from "../api";
+import type { Machine, Project, SessionInfo, Workspace } from "../api";
 import { workspacesApi } from "../api";
 import { machineScopedBundledPluginId } from "../../../shared/machinePluginIds";
 import { initialAppState } from "../appState";
@@ -2875,216 +2875,76 @@ describe("PiWebApp plugin host", () => {
     );
   });
 
-  it("completes workspace-removal polling when the deleted target no longer resolves", async () => {
-    const commandWorkspace: Workspace = { ...workspace, id: "workspace-command", path: "/repo", label: "main", isMain: true };
-    const targetWorkspace: Workspace = { ...workspace, id: "workspace-target", path: "/repo-target", label: "target", isMain: false };
-    const runningRun = {
-      id: "deletion-run",
-      origin: "core",
-      projectId: project.id,
-      workspaceId: commandWorkspace.id,
-      terminalId: "deletion-terminal",
-      title: "Remove target",
-      command: "remove-target",
-      status: "running" as const,
-      createdAt: "now",
-      metadata: { "pi.operation": "workspace.delete", "target.workspaceId": targetWorkspace.id },
+  /** A secondary checkout the provider is willing to remove. */
+  function removableTarget(): Workspace {
+    return {
+      ...workspace,
+      id: "workspace-target",
+      path: "/repo-target",
+      label: "target",
+      isMain: false,
+      removal: { actionLabel: "Remove worktree", confirmation: "Remove /repo-target?", precondition: "v1.confirmed" },
     };
-    const completedRun = { ...runningRun, status: "succeeded" as const, exitCode: 0, completedAt: "later" };
+  }
+
+  it("settles a workspace removal and moves off a checkout that no longer exists", async () => {
+    const targetWorkspace = removableTarget();
     const app = createApp();
     setAppState(app, {
       ...initialAppState(),
-      selectedProject: project,
-      selectedWorkspace: commandWorkspace,
-      workspaces: [commandWorkspace, targetWorkspace],
-      workspaceDeletionRuns: { [targetWorkspace.id]: runningRun },
-    });
-    await markPluginLoadingReady(app);
-    const compositions: unknown = Reflect.get(app, "requiredTerminalByMachine");
-    if (!(compositions instanceof Map)) throw new Error("PiWebApp required Terminal composition map was unavailable");
-    const composition: unknown = compositions.get("local");
-    if (!isRequiredTerminalComposition(composition)) throw new Error("Local Terminal composition was unavailable");
-    compositions.set("local", { ...composition, facade: new TerminalFacade() });
-    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes(`/workspaces/${targetWorkspace.id}/`)) {
-        return Promise.resolve(new Response(JSON.stringify({ error: "Workspace not found" }), { status: 404, headers: { "content-type": "application/json" } }));
-      }
-      return Promise.resolve(new Response(JSON.stringify([completedRun]), { status: 200, headers: { "content-type": "application/json" } }));
-    }));
-    const workspaceController: unknown = Reflect.get(app, "workspaces");
-    if (typeof workspaceController !== "object" || workspaceController === null) throw new Error("Workspace controller was unavailable");
-    const refreshAfterDeleted = vi.fn<(
-      projectId: string,
-      workspaceId: string,
-      machineId?: string,
-      options?: { signal?: AbortSignal; isCurrent?: () => boolean },
-    ) => Promise<void>>().mockResolvedValue(undefined);
-    if (!Reflect.set(workspaceController, "refreshAfterWorkspaceDeleted", refreshAfterDeleted)) throw new Error("Could not observe deletion completion refresh");
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    await callAsyncAppMethod(app, "refreshWorkspaceDeletionRuns");
-
-    expect(refreshAfterDeleted).toHaveBeenCalledOnce();
-    const reconciliationOptions = refreshAfterDeleted.mock.calls[0]?.[3];
-    expect(refreshAfterDeleted.mock.calls[0]?.slice(0, 3)).toEqual([project.id, targetWorkspace.id, "local"]);
-    expect(reconciliationOptions?.signal).toBeInstanceOf(AbortSignal);
-    expect(reconciliationOptions?.isCurrent).toBeTypeOf("function");
-    expect(appState(app).workspaceDeletionRuns[targetWorkspace.id]).toBeUndefined();
-    expect(Reflect.get(app, "workspaceDeletionPollTimer")).toBeUndefined();
-  });
-
-  it("aborts an old project deletion refresh and lets the new scope refresh immediately", async () => {
-    const otherProject: Project = { id: "project-2", name: "Other", path: "/other", createdAt: "now" };
-    const otherWorkspace: Workspace = { ...workspace, id: "workspace-2", projectId: otherProject.id, path: "/other", label: "other" };
-    const app = createApp();
-    setAppState(app, {
-      ...initialAppState(),
-      projects: [project, otherProject],
-      selectedProject: project,
-      selectedWorkspace: workspace,
-      workspaces: [workspace],
-    });
-    await markPluginLoadingReady(app);
-    const oldRefresh = deferredValue<TerminalCommandRun[]>();
-    const signals: (AbortSignal | undefined)[] = [];
-    let requestCount = 0;
-    const listCommandRuns = vi.fn<RequiredTerminalBrowserFacadeV1["listCommandRuns"]>((query) => {
-      signals.push(query.signal);
-      requestCount += 1;
-      return requestCount === 1 ? oldRefresh.promise : Promise.resolve([]);
-    });
-    replaceTestTerminalFacade(app, { ...testTerminalFacade(), listCommandRuns });
-
-    const firstRefresh = callAsyncAppMethod(app, "refreshWorkspaceDeletionRuns");
-    await vi.waitFor(() => { expect(listCommandRuns).toHaveBeenCalledOnce(); });
-    callAppMethod(app, "setState", {
-      selectedProject: otherProject,
-      selectedWorkspace: otherWorkspace,
-      workspaces: [otherWorkspace],
-    });
-
-    expect(signals[0]?.aborted).toBe(true);
-    await vi.waitFor(() => { expect(listCommandRuns).toHaveBeenCalledTimes(2); });
-    oldRefresh.resolve([{
-      id: "stale-run",
-      origin: "core",
-      projectId: project.id,
-      workspaceId: workspace.id,
-      terminalId: "stale-terminal",
-      title: "Stale",
-      command: "true",
-      status: "running",
-      createdAt: "now",
-      metadata: { "pi.operation": "workspace.delete", "target.workspaceId": "stale-target" },
-    }]);
-    await firstRefresh;
-
-    expect(appState(app).selectedProject?.id).toBe(otherProject.id);
-    expect(appState(app).workspaceDeletionRuns).toEqual({});
-  });
-
-  it("fences a deferred deletion reconciliation across cancellation and an A-to-B-to-A scope return", async () => {
-    const otherProject: Project = { id: "project-2", name: "Other", path: "/other", createdAt: "now" };
-    const targetWorkspace: Workspace = { ...workspace, id: "workspace-target", path: "/repo-target", label: "target", isMain: false };
-    const fallbackWorkspace: Workspace = { ...workspace, id: "workspace-main", path: "/repo", label: "main", isMain: true };
-    const otherWorkspace: Workspace = { ...workspace, id: "workspace-other", projectId: otherProject.id, path: "/other", label: "other", isMain: true };
-    const completedRun: TerminalCommandRun = {
-      id: "completed-run",
-      origin: "core",
-      projectId: project.id,
-      workspaceId: fallbackWorkspace.id,
-      terminalId: "completed-terminal",
-      title: "Remove target",
-      command: "true",
-      status: "succeeded",
-      exitCode: 0,
-      createdAt: "now",
-      completedAt: "later",
-      metadata: { "pi.operation": "workspace.delete", "target.workspaceId": targetWorkspace.id },
-    };
-    const app = createApp();
-    setAppState(app, {
-      ...initialAppState(),
-      projects: [project, otherProject],
+      projects: [project],
       selectedProject: project,
       selectedWorkspace: targetWorkspace,
-      workspaces: [targetWorkspace],
-      workspaceDeletionRuns: { [targetWorkspace.id]: completedRun },
+      workspaces: [workspace, targetWorkspace],
     });
     await markPluginLoadingReady(app);
+    const removed = vi.fn(() => Promise.resolve({ removed: true as const }));
+    if (!Reflect.set(workspacesApi, "deleteWorkspace", removed)) throw new Error("Could not control workspace removal");
     const workspaceController: unknown = Reflect.get(app, "workspaces");
     if (typeof workspaceController !== "object" || workspaceController === null) throw new Error("Workspace controller was unavailable");
-    const controllerApi: unknown = Reflect.get(workspaceController, "api");
-    if (typeof controllerApi !== "object" || controllerApi === null) throw new Error("Workspace controller API was unavailable");
-    const pendingWorkspaces = deferredValue<Workspace[]>();
-    let reconciliationOptions: { signal?: AbortSignal; isCurrent?: () => boolean } | undefined;
-    const loadWorkspaces = vi.fn((_projectId: string, _machineId?: string, options?: { signal?: AbortSignal }) => {
-      reconciliationOptions = options;
-      return pendingWorkspaces.promise;
-    });
-    const loadSessions = vi.fn(() => Promise.resolve([]));
-    if (!Reflect.set(workspaceController, "api", { ...controllerApi, ...workspaceApiStub(loadWorkspaces, loadSessions) })) {
-      throw new Error("Could not control workspace reconciliation requests");
-    }
+    const refreshAfterDeleted = vi.fn(() => Promise.resolve());
+    if (!Reflect.set(workspaceController, "refreshAfterWorkspaceDeleted", refreshAfterDeleted)) throw new Error("Could not observe deletion completion refresh");
+    vi.stubGlobal("confirm", () => true);
 
-    const refreshing = callAsyncAppMethod(app, "refreshWorkspaceDeletionRuns");
-    await vi.waitFor(() => { expect(loadWorkspaces).toHaveBeenCalledOnce(); });
-    callAppMethod(app, "setState", { selectedProject: otherProject, selectedWorkspace: otherWorkspace, workspaces: [otherWorkspace] });
-    callAppMethod(app, "setState", { selectedProject: project, selectedWorkspace: targetWorkspace, workspaces: [targetWorkspace] });
-    pendingWorkspaces.resolve([fallbackWorkspace]);
-    await refreshing;
+    // The request is awaited, so the worktree is gone before this resolves and
+    // the checkout it was selected from has to be given up.
+    await callAsyncAppMethod(app, "deleteWorkspace", targetWorkspace);
 
-    expect(reconciliationOptions?.signal?.aborted).toBe(true);
-    expect(appState(app).selectedProject).toBe(project);
-    expect(appState(app).selectedWorkspace).toBe(targetWorkspace);
-    expect(appState(app).workspaces).toEqual([targetWorkspace]);
-    expect(loadSessions).not.toHaveBeenCalled();
+    expect(removed).toHaveBeenCalledWith(project.id, targetWorkspace.id, targetWorkspace.removal?.precondition, "local");
+    expect(refreshAfterDeleted).toHaveBeenCalledWith(project.id, targetWorkspace.id, "local");
+    const removing: unknown = Reflect.get(app, "workspaceRemovalsInFlight");
+    expect(removing instanceof Set ? removing.size : removing).toBe(0);
   });
 
-  it("retries successful deletion reconciliation before marking the run handled", async () => {
-    vi.useFakeTimers();
-    const completedRun: TerminalCommandRun = {
-      id: "completed-run",
-      origin: "core",
-      projectId: project.id,
-      workspaceId: workspace.id,
-      terminalId: "completed-terminal",
-      title: "Remove target",
-      command: "true",
-      status: "succeeded",
-      exitCode: 0,
-      createdAt: "now",
-      completedAt: "later",
-      metadata: { "pi.operation": "workspace.delete", "target.workspaceId": "target-workspace" },
-    };
+  it("reports a removal that failed and leaves the checkout selected and usable", async () => {
+    const targetWorkspace = removableTarget();
     const app = createApp();
     setAppState(app, {
       ...initialAppState(),
+      projects: [project],
       selectedProject: project,
-      selectedWorkspace: workspace,
-      workspaces: [workspace],
-      workspaceDeletionRuns: { "target-workspace": completedRun },
+      selectedWorkspace: targetWorkspace,
+      workspaces: [workspace, targetWorkspace],
     });
     await markPluginLoadingReady(app);
+    if (!Reflect.set(workspacesApi, "deleteWorkspace", () => Promise.reject(new Error("fatal: is a working tree")))) {
+      throw new Error("Could not control workspace removal");
+    }
     const workspaceController: unknown = Reflect.get(app, "workspaces");
     if (typeof workspaceController !== "object" || workspaceController === null) throw new Error("Workspace controller was unavailable");
-    const refreshAfterDeleted = vi.fn()
-      .mockRejectedValueOnce(new Error("topology unavailable"))
-      .mockResolvedValueOnce(undefined);
-    if (!Reflect.set(workspaceController, "refreshAfterWorkspaceDeleted", refreshAfterDeleted)) throw new Error("Could not control deletion reconciliation");
+    const refreshAfterDeleted = vi.fn(() => Promise.resolve());
+    if (!Reflect.set(workspaceController, "refreshAfterWorkspaceDeleted", refreshAfterDeleted)) throw new Error("Could not observe deletion completion refresh");
+    vi.stubGlobal("confirm", () => true);
 
-    await callAsyncAppMethod(app, "refreshWorkspaceDeletionRuns");
+    await callAsyncAppMethod(app, "deleteWorkspace", targetWorkspace);
 
-    expect(appState(app).workspaceDeletionRuns["target-workspace"]).toEqual(completedRun);
-    const errorScope = workspaceBrowserErrorScope("local", project.id, "target-workspace");
-    expect(appState(app).browserErrors[browserErrorScopeKey(errorScope)]?.message).toContain("Retrying");
-    expect(refreshAfterDeleted).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.waitFor(() => { expect(refreshAfterDeleted).toHaveBeenCalledTimes(2); });
-    await vi.waitFor(() => { expect(appState(app).workspaceDeletionRuns["target-workspace"]).toBeUndefined(); });
-    expect(appState(app).browserErrors[browserErrorScopeKey(errorScope)]).toBeUndefined();
+    // Nothing is watching a terminal, so the reason the command gave has to
+    // arrive here — and the row must be usable again afterwards.
+    const errorScope = workspaceBrowserErrorScope("local", project.id, targetWorkspace.id);
+    expect(appState(app).browserErrors[browserErrorScopeKey(errorScope)]?.message).toContain("fatal: is a working tree");
+    expect(refreshAfterDeleted).not.toHaveBeenCalled();
+    const removing: unknown = Reflect.get(app, "workspaceRemovalsInFlight");
+    expect(removing instanceof Set ? removing.size : removing).toBe(0);
   });
 
   it("publishes a cross-workspace command terminal atomically on the target route", async () => {
@@ -4208,13 +4068,6 @@ function testTerminalFacade(): RequiredTerminalBrowserFacadeV1 {
   };
 }
 
-function replaceTestTerminalFacade(app: PiWebApp, facade: RequiredTerminalBrowserFacadeV1): void {
-  const compositions: unknown = Reflect.get(app, "requiredTerminalByMachine");
-  if (!(compositions instanceof Map)) throw new Error("PiWebApp required Terminal composition map was unavailable");
-  const composition: unknown = compositions.get("local");
-  if (!isRequiredTerminalComposition(composition)) throw new Error("Local Terminal composition was unavailable");
-  compositions.set("local", { ...composition, facade });
-}
 
 function deferredValue<T>(): { promise: Promise<T>; resolve(value: T): void } {
   let resolvePromise: (value: T) => void = () => undefined;
@@ -4222,9 +4075,6 @@ function deferredValue<T>(): { promise: Promise<T>; resolve(value: T): void } {
   return { promise, resolve: resolvePromise };
 }
 
-function isRequiredTerminalComposition(value: unknown): value is { binding: unknown; facade: unknown } {
-  return typeof value === "object" && value !== null && "binding" in value && "facade" in value;
-}
 
 function isWorkspacePanelTerminal(value: unknown): value is WorkspacePanelContext["terminal"] {
   return typeof value === "object"

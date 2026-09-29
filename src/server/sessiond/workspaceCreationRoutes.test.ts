@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TerminalCommandRun, WorkspaceCreationPreview } from "../../shared/apiTypes.js";
+import type { WorkspaceCreationPreview } from "../../shared/apiTypes.js";
 import type { Project } from "../types.js";
 import { WorkspaceCreationError } from "../workspaces/workspaceCreationService.js";
 import { registerWorkspaceCreationRoutes, type WorkspaceCreator } from "./workspaceCreationRoutes.js";
@@ -18,19 +18,6 @@ const preview: WorkspaceCreationPreview = {
   confirmation: "Create a detached worktree at /worktrees/repo/review?",
   command: "git worktree add --detach '/worktrees/repo/review' 'origin/main'",
   precondition: "v1.confirmed",
-};
-
-const run: TerminalCommandRun = {
-  id: "run-1",
-  origin: "core",
-  projectId: project.id,
-  workspaceId: "main",
-  terminalId: "terminal-1",
-  title: "Create worktree: review",
-  command: preview.command,
-  status: "running",
-  createdAt: "2026-07-27T00:00:00.000Z",
-  metadata: { "pi.operation": "workspace.create", "target.workspacePath": preview.path },
 };
 
 let app: FastifyInstance;
@@ -63,7 +50,7 @@ describe("session daemon workspace creation routes", () => {
     expect(call?.[2].aborted).toBe(false);
   });
 
-  it("runs a confirmed creation and returns the host-owned command run", async () => {
+  it("runs a confirmed creation and answers with the worktree that now exists", async () => {
     const { create } = creatorFakes();
     registerWorkspaceCreationRoutes(app, { projects: projectReader(), creations: { preview: vi.fn(), create } });
 
@@ -74,7 +61,8 @@ describe("session daemon workspace creation routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json<TerminalCommandRun>()).toEqual(run);
+    // Creation runs and waits, so the answer is the worktree that now exists.
+    expect(response.json()).toEqual({ created: true, path: preview.path });
     const call = create.mock.calls[0];
     expect(call?.slice(0, 3)).toEqual([
       project,
@@ -158,7 +146,7 @@ function creatorFakes(): {
 } {
   return {
     previewCreate: vi.fn<WorkspaceCreator["preview"]>(() => Promise.resolve(preview)),
-    create: vi.fn<WorkspaceCreator["create"]>(() => Promise.resolve(run)),
+    create: vi.fn<WorkspaceCreator["create"]>(() => Promise.resolve({ path: preview.path })),
   };
 }
 

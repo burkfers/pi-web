@@ -45,7 +45,12 @@ export interface WorktreeSessionProjectReader {
 
 export interface WorktreeSessionCreator {
   preview(project: Project, request: ProviderCreationRequest, signal: AbortSignal): Promise<{ readonly path: string; readonly precondition: string }>;
-  create(project: Project, request: ProviderCreationRequest, precondition: string, signal: AbortSignal): Promise<void>;
+  /**
+   * Create the worktree and resolve only once it exists, with the path it was
+   * created at. A session's working directory cannot be fixed up afterwards, so
+   * this must not resolve before the directory is really there.
+   */
+  create(project: Project, request: ProviderCreationRequest, precondition: string, signal: AbortSignal): Promise<{ path: string }>;
 }
 
 export interface WorktreeSessionLauncher {
@@ -104,9 +109,17 @@ export class WorktreeSessionService {
     // plan is re-derived at execution, so a repository that moved in between
     // fails the confirmation instead of running a different plan.
     const preview = await this.host.creations.preview(project, creation, signal);
-    await this.host.creations.create(project, creation, preview.precondition, signal);
+    const created = await this.host.creations.create(project, creation, preview.precondition, signal);
 
-    const worktreePath = preview.path;
+    // The created path, not the planned one: they agree today, and if a provider
+    // ever plans one thing and creates another, this is the truth.
+    const worktreePath = created.path;
+    // The invariant the whole design rests on, checked where it is depended on
+    // rather than assumed: a session must never record a directory that is not
+    // there, because its working directory cannot be corrected later.
+    if (!await this.host.workspaceExists(worktreePath)) {
+      throw new WorktreeSessionError(`The worktree was not created at ${worktreePath}`, 500);
+    }
     const createdAt = new Date().toISOString();
     try {
       const session = await this.host.sessions.start(worktreePath);

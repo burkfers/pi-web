@@ -4,7 +4,7 @@ import type { Stats } from "node:fs";
 import { join, sep } from "node:path";
 import { isRecord, tryParseEntry } from "./sessionFileFormat.js";
 import type { PiSessionListEntry } from "./piSessionService.js";
-import { sessionWorktreeOwnershipFromHeader } from "./sessionWorktreeOwnership.js";
+import { sessionDetachmentFromHeader, sessionWorktreeOwnershipFromHeader } from "./sessionWorktreeOwnership.js";
 
 /*
  * LISTING CONTRACT
@@ -327,6 +327,7 @@ function buildSummaryFromFold(fold: SummaryFoldState, filePath: string, mtime: D
   const headerCwd = fold.header["cwd"];
   const parentSessionPath = fold.header["parentSession"];
   const worktree = sessionWorktreeOwnershipFromHeader(fold.header);
+  const detachment = sessionDetachmentFromHeader(fold.header);
   const headerTimestamp = fold.header["timestamp"];
   return {
     path: filePath,
@@ -342,6 +343,7 @@ function buildSummaryFromFold(fold: SummaryFoldState, filePath: string, mtime: D
     ...(fold.name === undefined ? {} : { name: fold.name }),
     ...(typeof parentSessionPath === "string" ? { parentSessionPath } : {}),
     ...(worktree === undefined ? {} : { worktree }),
+    ...(detachment === undefined ? {} : { detachment }),
   };
 }
 

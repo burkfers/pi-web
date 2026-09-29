@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access, copyFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { piWebDataDir } from "../../config.js";
-import type { SessionWorktreeOwnership } from "../../shared/apiTypes.js";
+import type { SessionDetachment, SessionWorktreeOwnership } from "../../shared/apiTypes.js";
 import { canonicalizeStoredCwd } from "../workingDirectory.js";
 
 export interface ArchiveSessionInput {
@@ -17,6 +17,7 @@ export interface ArchiveSessionInput {
   name?: string;
   parentSessionPath?: string;
   worktree?: SessionWorktreeOwnership;
+  detachment?: SessionDetachment;
 }
 
 export interface ArchivedSessionRecord {
@@ -33,6 +34,8 @@ export interface ArchivedSessionRecord {
   parentSessionPath?: string;
   /** Kept on the archived record so a parked session can still be cleaned up. */
   worktree?: SessionWorktreeOwnership;
+  /** Kept so a resumed session can be told what its worktree was released from. */
+  detachment?: SessionDetachment;
 }
 
 export interface SessionArchiveFile {
@@ -194,6 +197,7 @@ function archiveRecordFromInput(session: ArchiveSessionInput, archive: { archive
     ...(session.name === undefined ? {} : { name: session.name }),
     ...(session.parentSessionPath === undefined ? {} : { parentSessionPath: session.parentSessionPath }),
     ...(session.worktree === undefined ? {} : { worktree: session.worktree }),
+    ...(session.detachment === undefined ? {} : { detachment: session.detachment }),
   };
 }
 
@@ -257,6 +261,7 @@ function parseArchivedSessionRecord(value: unknown): ArchivedSessionRecord {
   const name = optionalString(value, "name");
   const parentSessionPath = optionalString(value, "parentSessionPath");
   const worktree = parseArchivedWorktreeOwnership(value["worktree"]);
+  const detachment = parseArchivedDetachment(value["detachment"]);
   return {
     sessionId,
     cwd: canonicalCwd,
@@ -270,6 +275,7 @@ function parseArchivedSessionRecord(value: unknown): ArchivedSessionRecord {
     ...(name === undefined ? {} : { name }),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
     ...(worktree === undefined ? {} : { worktree }),
+    ...(detachment === undefined ? {} : { detachment }),
   };
 }
 
@@ -278,6 +284,15 @@ function parseArchivedWorktreeOwnership(value: unknown): SessionWorktreeOwnershi
   if (value["owned"] !== true) return undefined;
   const createdAt = value["createdAt"];
   return typeof createdAt === "string" && createdAt !== "" ? { owned: true, createdAt } : undefined;
+}
+
+function parseArchivedDetachment(value: unknown): SessionDetachment | undefined {
+  if (!isRecord(value)) return undefined;
+  const detachedFrom = value["detachedFrom"];
+  const detachedAt = value["detachedAt"];
+  if (typeof detachedFrom !== "string" || detachedFrom === "") return undefined;
+  if (typeof detachedAt !== "string" || detachedAt === "") return undefined;
+  return { detachedFrom, detachedAt };
 }
 
 function optionalString(record: Record<string, unknown>, key: string): string | undefined {

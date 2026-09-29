@@ -1900,6 +1900,7 @@ function requiredTerminalServiceFixture() {
   return {
     closeForCwd: () => undefined,
     runCommand: () => run,
+    getCommandRun: () => run,
     bindActivitySink: () => undefined,
   };
 }

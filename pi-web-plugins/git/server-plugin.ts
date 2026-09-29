@@ -6,6 +6,8 @@ import type {
   ProviderClaim,
   ProviderCreateContext,
   ProviderCreationDescriptor,
+  ProviderDetachContext,
+  ProviderDetachResult,
   ProviderRemoveContext,
   ProviderWorkspace,
   ServerPluginActivationContext,
@@ -157,6 +159,34 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
           command,
         ].join("\n"),
       };
+    },
+    async detach({ workspace, signal }: ProviderDetachContext): Promise<ProviderDetachResult> {
+      // Detaching only makes sense for a linked worktree: the main checkout's
+      // branch is the project's own, and moving it would change what every
+      // other session in that checkout sees.
+      const privatePath = gitPrivateWorktreePath(workspace);
+      if (resolve(privatePath) !== workspace.path) {
+        throw new Error("Git workspace detach data no longer matches the current workspace path");
+      }
+      const head = await requireGit(
+        runGit(context, workspace.path, ["rev-parse", "HEAD"], signal),
+        "read the worktree commit before detaching",
+      );
+      const current = head.stdout.trim();
+      // `symbolic-ref` exits non-zero on a detached HEAD, which is the answer
+      // rather than a failure: there is no branch to release.
+      const attached = await runGit(context, workspace.path, ["symbolic-ref", "--quiet", "--short", "HEAD"], signal);
+      if (attached.signal !== null) throw new Error(`git symbolic-ref ended from signal ${attached.signal}`);
+      if (attached.exitCode !== 0) return { detached: false, head: current };
+
+      const branch = attached.stdout.trim();
+      // `switch --detach` leaves the working tree exactly as it is and only
+      // detaches the branch pointer, so nothing the agent wrote is lost.
+      await requireGit(
+        runGit(context, workspace.path, ["switch", "--detach", "--quiet"], signal),
+        `detach the worktree from ${branch}`,
+      );
+      return { detached: true, branch, head: current };
     },
     async prepareRemove({ project, workspace, signal }: ProviderRemoveContext): Promise<WorkspaceRemovePlan> {
       const privatePath = gitPrivateWorktreePath(workspace);

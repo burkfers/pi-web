@@ -291,6 +291,45 @@ describe("bundled Git workspace provider", () => {
     await expect(create("main", taken)).rejects.toThrow(`A file or directory already exists at ${taken}`);
   });
 
+  it("detaches a worktree from its branch without touching the working tree", async () => {
+    const repository = await createRepository("archive detach");
+    const linked = join(repository.parent, "attached worktree");
+    runGit(repository.path, ["worktree", "add", "-b", "feature-x", linked]);
+    await writeFile(join(linked, "tracked.txt"), "in progress\n", "utf8");
+    const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
+    const input = project(repository.path);
+    const listed = (await workspaceProvider.list(input, new AbortController().signal)).find(({ path: candidate }) => candidate === linked);
+    const head = runGit(repository.path, ["rev-parse", "HEAD"]).trim();
+    if (listed === undefined || workspaceProvider.detach === undefined) throw new Error("Expected a linked worktree");
+
+    const result = await workspaceProvider.detach({ project: input, workspace: listed, signal: new AbortController().signal });
+
+    expect(result).toEqual({ detached: true, branch: "feature-x", head });
+    // The checkout is released, so another worktree can take the branch...
+    const second = join(repository.parent, "second worktree");
+    runGit(repository.path, ["worktree", "add", second, "feature-x"]);
+    expect(runGit(second, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("feature-x");
+    // ...and the branch itself is untouched, so nothing was lost by parking it.
+    expect(runGit(repository.path, ["rev-parse", "feature-x"]).trim()).toBe(head);
+    // ...while the parked worktree keeps its commit and its uncommitted work.
+    expect(runGit(linked, ["rev-parse", "HEAD"]).trim()).toBe(head);
+    expect(runGit(linked, ["diff", "--name-only"]).trim()).toBe("tracked.txt");
+  });
+
+  it("reports an already detached worktree as nothing to release", async () => {
+    const repository = await createRepository("already detached");
+    const linked = join(repository.parent, "detached worktree");
+    runGit(repository.path, ["worktree", "add", "--detach", linked]);
+    const workspaceProvider = await providerFor(createServerPluginExecFile({ env: cleanGitEnvironment() }));
+    const input = project(repository.path);
+    const listed = (await workspaceProvider.list(input, new AbortController().signal)).find(({ path: candidate }) => candidate === linked);
+    const head = runGit(linked, ["rev-parse", "HEAD"]).trim();
+    if (listed === undefined || workspaceProvider.detach === undefined) throw new Error("Expected a detached worktree");
+
+    await expect(workspaceProvider.detach({ project: input, workspace: listed, signal: new AbortController().signal }))
+      .resolves.toEqual({ detached: false, head });
+  });
+
   it("warns in the removal confirmation about commits a detached worktree alone holds", async () => {
     const repository = await createRepository("unanchored removal");
     const detached = join(repository.parent, "detached removal");

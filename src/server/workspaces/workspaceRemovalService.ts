@@ -1,13 +1,16 @@
 import { isAbsolute, parse, relative, resolve, sep } from "node:path";
-import type { TerminalCommandRun, WorkspaceListing } from "../../shared/apiTypes.js";
-import { workspaceDeleteOperation, workspaceDeletionMetadata } from "../../shared/workspaceDeletion.js";
+import type { WorkspaceListing } from "../../shared/apiTypes.js";
+import { workspaceDeleteOperation } from "../../shared/workspaceDeletion.js";
 import type { ServerNoticeCreator } from "../notices/serverNoticeService.js";
 import {
   requireWorkspaceRemovalPrecondition,
   WORKSPACE_REMOVAL_OPERATION_TIMEOUT_MS,
 } from "../../shared/workspaceRemovalProtocol.js";
 import type { Project } from "../types.js";
-import type { RunTerminalCommandOptions } from "../terminals/requiredTerminalService.js";
+import { quietCommandFailureDetail, runQuietCommand, type QuietCommandOptions, type QuietCommandResult } from "../terminals/quietCommand.js";
+
+/** The one capability removal needs from the outside world: run a command. */
+export type QuietCommandRunner = (options: QuietCommandOptions) => Promise<QuietCommandResult>;
 import {
   WorkspaceProviderRemovalError,
   type WorkspaceProviderRemovalTarget,
@@ -29,12 +32,13 @@ export interface WorkspaceRemovalProvider {
 
 export interface WorkspaceRemovalTerminalHost {
   closeForCwd(cwd: string): void;
-  runCommand(options: RunTerminalCommandOptions): TerminalCommandRun;
 }
 
 export interface WorkspaceRemovalServiceOptions {
   timeoutMs?: number;
   preRemoveHook?: WorktreePreRemoveHookProbe;
+  /** Runs the composed command; replaced in tests, real by default. */
+  runCommand?: QuietCommandRunner;
   /** Records non-cancelled removal failures before the request reports them. */
   notices?: Pick<ServerNoticeCreator, "record">;
 }
@@ -42,7 +46,7 @@ export interface WorkspaceRemovalServiceOptions {
 interface WorkspaceRemovalFlight {
   precondition: string;
   controller: AbortController;
-  promise: Promise<TerminalCommandRun>;
+  promise: Promise<void>;
   waiters: number;
   settled: boolean;
 }
@@ -63,6 +67,7 @@ export class WorkspaceRemovalError extends Error {
 export class WorkspaceRemovalService {
   private readonly timeoutMs: number;
   private readonly preRemoveHook: WorktreePreRemoveHookProbe;
+  private readonly runCommand: QuietCommandRunner;
   private readonly notices: Pick<ServerNoticeCreator, "record"> | undefined;
   private readonly flights = new Map<string, WorkspaceRemovalFlight>();
   private readonly shutdown = new AbortController();
@@ -75,6 +80,7 @@ export class WorkspaceRemovalService {
   ) {
     this.timeoutMs = positiveInteger(options.timeoutMs ?? WORKSPACE_REMOVAL_OPERATION_TIMEOUT_MS, "timeoutMs");
     this.preRemoveHook = options.preRemoveHook ?? realWorktreePreRemoveHookProbe;
+    this.runCommand = options.runCommand ?? runQuietCommand;
     this.notices = options.notices;
   }
 
@@ -83,7 +89,7 @@ export class WorkspaceRemovalService {
     workspaceId: string,
     precondition: string,
     signal?: AbortSignal,
-  ): Promise<TerminalCommandRun> {
+  ): Promise<void> {
     throwIfAborted(this.shutdown.signal);
     let expectedPrecondition: string;
     try {
@@ -102,7 +108,7 @@ export class WorkspaceRemovalService {
           409,
         );
       }
-      return await this.waitForFlight(currentFlight, signal);
+      return this.waitForFlight(currentFlight, signal);
     }
 
     const controller = new AbortController();
@@ -119,7 +125,7 @@ export class WorkspaceRemovalService {
       () => { this.finishFlight(key, flight); },
       () => { this.finishFlight(key, flight); },
     );
-    return await this.waitForFlight(flight, signal);
+    await this.waitForFlight(flight, signal);
   }
 
   /** Cancels removal orchestration before the required Terminal capability is disposed. */
@@ -142,9 +148,9 @@ export class WorkspaceRemovalService {
     workspaceId: string,
     precondition: string,
     flightSignal: AbortSignal,
-  ): Promise<TerminalCommandRun> {
+  ): Promise<void> {
     try {
-      return await runBoundedRemoval(this.timeoutMs, flightSignal, async (signal) => {
+      await runBoundedRemoval(this.timeoutMs, flightSignal, async (signal) => {
         const current = await this.providers.resolveRemoval(project, workspaceId, signal);
         throwIfAborted(signal);
         const { target, commandWorkspace } = validateCurrentRemoval(project, workspaceId, precondition, current);
@@ -180,27 +186,34 @@ export class WorkspaceRemovalService {
         }
         throwIfAborted(signal);
 
+        // Run and wait, quietly. The user confirmed this removal in a dialog
+        // that already spelled out the confirmation text, the pre-remove hook,
+        // and any commits only this worktree holds; a terminal to watch on top
+        // of that is noise. A failure is reported with what the command said.
+        let result: QuietCommandResult;
         try {
-          return this.terminals.runCommand({
-            origin: "core",
-            projectId: project.id,
-            workspaceId: commandWorkspace.id,
-            cwd: commandWorkspace.path,
-            title: plan.title,
+          result = await this.runCommand({
             command,
-            metadata: workspaceDeletionMetadata(target),
-            failureNotice: {
-              message: "Workspace removal failed. See terminal output.",
-              context: { targetWorkspaceId: target.id },
-            },
+            cwd: commandWorkspace.path,
+            signal,
           });
         } catch (error) {
+          // The command never started, which is a different thing from a command
+          // that started and failed.
           throw new WorkspaceRemovalError(
-            `Failed to start workspace removal: ${errorMessage(error)}`,
+            `Failed to run workspace removal: ${errorMessage(error)}`,
             400,
             { cause: error },
           );
         }
+        if (result.exitCode !== 0) {
+          const detail = quietCommandFailureDetail(result);
+          throw new WorkspaceRemovalError(
+            `Workspace removal failed: ${detail ?? `the command exited with code ${String(result.exitCode)}`}`,
+            409,
+          );
+        }
+        return undefined;
       });
     } catch (error) {
       const failure = error instanceof WorkspaceRemovalDeadlineError
@@ -217,7 +230,7 @@ export class WorkspaceRemovalService {
     }
   }
 
-  private waitForFlight(flight: WorkspaceRemovalFlight, signal?: AbortSignal): Promise<TerminalCommandRun> {
+  private waitForFlight(flight: WorkspaceRemovalFlight, signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     flight.waiters += 1;
 

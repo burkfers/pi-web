@@ -5,11 +5,11 @@ import type {
   ProviderWorkspace,
   WorkspaceProvider,
 } from "../../server-plugin-api.js";
-import type { ServerNotice, TerminalCommandRun, WorkspaceListing } from "../../shared/apiTypes.js";
+import type { ServerNotice, WorkspaceListing } from "../../shared/apiTypes.js";
 import type { ServerNoticeCreator } from "../notices/serverNoticeService.js";
 import type { ServerPluginProviderContribution } from "../plugins/serverPluginRuntime.js";
 import type { Project } from "../types.js";
-import type { RunTerminalCommandOptions } from "../terminals/requiredTerminalService.js";
+import type { QuietCommandOptions, QuietCommandResult } from "../terminals/quietCommand.js";
 import {
   WorkspaceProviderRegistry,
   type WorkspaceProviderRemovalTarget,
@@ -81,9 +81,9 @@ describe("WorkspaceRemovalService", () => {
     });
     expect(target.removal?.precondition).toMatch(/^v1\.[A-Za-z0-9_-]{43}$/u);
     const terminals = terminalHost(calls);
-    const removals = new WorkspaceRemovalService(registry, terminals);
+    const removals = new WorkspaceRemovalService(registry, terminals, { runCommand: terminals.runCommand });
 
-    const run = await removals.remove(project, target.id, removalPrecondition(target));
+    await removals.remove(project, target.id, removalPrecondition(target));
 
     expect(calls).toEqual(["probe", "list", "probe", "list", "prepare", "close", "run"]);
     expect(preparedContext).toMatchObject({
@@ -103,28 +103,13 @@ describe("WorkspaceRemovalService", () => {
     });
     expect(preparedContext?.signal.aborted).toBe(true);
     expect(terminals.closedCwds).toEqual([hostPath("/board-views/roadmap")]);
-    expect(terminals.runOptions).toEqual([{
-      origin: "core",
-      projectId: project.id,
-      workspaceId: commandWorkspace.id,
-      cwd: hostPath("/repo"),
-      title: "Disconnect board view: Roadmap",
-      command: "boardctl view disconnect roadmap --keep-files",
-      metadata: {
-        "pi.operation": "workspace.delete",
-        "target.workspaceId": target.id,
-        "target.workspacePath": hostPath("/board-views/roadmap"),
-      },
-      failureNotice: {
-        message: "Workspace removal failed. See terminal output.",
-        context: { targetWorkspaceId: target.id },
-      },
-    }]);
-    expect(run).toMatchObject({
-      title: "Disconnect board view: Roadmap",
-      command: "boardctl view disconnect roadmap --keep-files",
-      workspaceId: terminals.runOptions[0]?.workspaceId,
-    });
+    // One command, from the command workspace, exactly as the provider planned
+    // it — and nothing on screen to watch it happen.
+    expect(terminals.runOptions).toHaveLength(1);
+    expect(terminals.runOptions[0]?.command).toBe("boardctl view disconnect roadmap --keep-files");
+    expect(terminals.runOptions[0]?.cwd).toBe(hostPath("/repo"));
+    expect(terminals.runOptions[0]?.signal).toBeInstanceOf(AbortSignal);
+    expect(commandWorkspace.id).not.toBe("");
   });
 
   it.each([
@@ -164,7 +149,7 @@ describe("WorkspaceRemovalService", () => {
       target,
       workspaces: [target, ...others],
       prepare,
-    }), terminals);
+    }), terminals, { runCommand: terminals.runCommand });
 
     await expect(removals.remove(input, target.id, removalPrecondition(target))).rejects.toThrow(message);
 
@@ -182,7 +167,7 @@ describe("WorkspaceRemovalService", () => {
       target,
       workspaces: [target, hostWorkspace("main", "/repo", true)],
       prepare,
-    }), terminals);
+    }), terminals, { runCommand: terminals.runCommand });
 
     await expect(wrongOwner.remove(project, target.id, removalPrecondition(target))).rejects.toThrow("owner is no longer current");
 
@@ -191,7 +176,7 @@ describe("WorkspaceRemovalService", () => {
       target,
       workspaces: [target, { ...hostWorkspace("foreign", "/foreign", true), projectId: "other-project" }],
       prepare,
-    }), terminals);
+    }), terminals, { runCommand: terminals.runCommand });
     await expect(noCommand.remove(project, target.id, removalPrecondition(target))).rejects.toThrow("non-target command workspace is required");
 
     expect(prepare).not.toHaveBeenCalled();
@@ -207,7 +192,7 @@ describe("WorkspaceRemovalService", () => {
       target,
       workspaces: [hostWorkspace("main", "/repo", true), target],
       prepare: () => Promise.reject(new Error("workspace has unsubmitted changes")),
-    }), terminals);
+    }), terminals, { runCommand: terminals.runCommand });
 
     await expect(removals.remove(project, target.id, removalPrecondition(target))).rejects.toThrow("workspace has unsubmitted changes");
 
@@ -229,7 +214,7 @@ describe("WorkspaceRemovalService", () => {
       target,
       workspaces: [hostWorkspace("main", "/repo", true), target],
       prepare: () => Promise.reject(new Error("workspace has unsubmitted changes")),
-    }), terminalHost(), { notices });
+    }), terminalHost(), { notices, runCommand: quietRunner() });
 
     await expect(removals.remove(project, target.id, removalPrecondition(target))).rejects.toThrow("workspace has unsubmitted changes");
 
@@ -254,7 +239,7 @@ describe("WorkspaceRemovalService", () => {
     let releaseResolution: ((value: WorkspaceProviderRemovalTarget) => void) | undefined;
     const removals = new WorkspaceRemovalService({
       resolveRemoval: () => new Promise<WorkspaceProviderRemovalTarget>((resolvePromise) => { releaseResolution = resolvePromise; }),
-    }, terminalHost(), { notices });
+    }, terminalHost(), { notices, runCommand: quietRunner() });
     const controller = new AbortController();
     const pending = removals.remove(project, target.id, removalPrecondition(target), controller.signal);
 
@@ -283,7 +268,7 @@ describe("WorkspaceRemovalService", () => {
       }, { once: true });
     }));
     const terminals = terminalHost();
-    const removals = new WorkspaceRemovalService({ resolveRemoval }, terminals);
+    const removals = new WorkspaceRemovalService({ resolveRemoval }, terminals, { runCommand: terminals.runCommand });
     const pending = removals.remove(project, target.id, removalPrecondition(target));
     const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError", message: "removal shutdown" });
     await vi.waitFor(() => { expect(operationSignal).toBeInstanceOf(AbortSignal); });
@@ -341,7 +326,7 @@ describe("WorkspaceRemovalService", () => {
       });
     });
     const terminals = terminalHost();
-    const removals = new WorkspaceRemovalService({ resolveRemoval }, terminals);
+    const removals = new WorkspaceRemovalService({ resolveRemoval }, terminals, { runCommand: terminals.runCommand });
     const firstController = new AbortController();
     const secondController = new AbortController();
 
@@ -359,7 +344,8 @@ describe("WorkspaceRemovalService", () => {
     expect(operationSignal?.aborted).toBe(false);
 
     releaseResolution?.(current);
-    await expect(second).resolves.toMatchObject({ id: "run-1", command: "neutral remove" });
+    // The surviving waiter gets the same completed removal, not a run to watch.
+    await expect(second).resolves.toBeUndefined();
 
     expect(prepare).toHaveBeenCalledOnce();
     expect(terminals.closedCwds).toEqual(["/linked"]);
@@ -426,7 +412,7 @@ describe("WorkspaceRemovalService", () => {
       target,
       workspaces: [hostWorkspace("main", "/repo", true), target],
       prepare: () => { calls.push("prepare"); return Promise.resolve({ title: "Remove", command: "neutral remove" }); },
-    }), terminals, { preRemoveHook: hookProbe(probedPaths, true) });
+    }), terminals, { preRemoveHook: hookProbe(probedPaths, true), runCommand: terminals.runCommand });
 
     await removals.remove(project, target.id, removalPrecondition(target));
 
@@ -446,7 +432,7 @@ describe("WorkspaceRemovalService", () => {
       target,
       workspaces: [hostWorkspace("main", "/repo", true), target],
       prepare: () => Promise.resolve({ title: "Remove", command: "neutral remove" }),
-    }), terminals, { preRemoveHook: hookProbe(probedPaths, false) });
+    }), terminals, { preRemoveHook: hookProbe(probedPaths, false), runCommand: terminals.runCommand });
 
     await removals.remove(project, target.id, removalPrecondition(target));
 
@@ -464,6 +450,7 @@ describe("WorkspaceRemovalService", () => {
       prepare: () => Promise.resolve({ title: "Remove", command: "neutral remove" }),
     }), terminals, {
       preRemoveHook: { isExecutable: () => Promise.reject(Object.assign(new Error("probe I/O error"), { code: "EIO" })) },
+      runCommand: terminals.runCommand,
     });
 
     await expect(removals.remove(project, target.id, removalPrecondition(target))).rejects.toMatchObject({
@@ -484,7 +471,7 @@ describe("WorkspaceRemovalService", () => {
       target,
       workspaces: [hostWorkspace("main", "/repo", true), target],
       prepare: () => { calls.push("prepare"); return Promise.resolve({ title: "Remove", command: "neutral remove" }); },
-    }), terminals);
+    }), terminals, { runCommand: terminals.runCommand });
 
     await expect(removals.remove(project, target.id, removalPrecondition(target))).rejects.toThrow("Failed to close workspace terminals: cleanup failed");
 
@@ -557,12 +544,23 @@ function removalPrecondition(workspace: WorkspaceListing): string {
   return precondition;
 }
 
-function terminalHost(calls: string[] = [], closeFailure?: Error): WorkspaceRemovalTerminalHost & {
+/**
+ * The terminal host now only closes a removed workspace's terminals; the
+ * command runs quietly, so the fake also stands in for the runner and records
+ * what was run rather than a run to watch.
+ */
+/** A runner for the cases that only need "it did not get that far". */
+function quietRunner(): (input: QuietCommandOptions) => Promise<QuietCommandResult> {
+  return () => Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false });
+}
+
+function terminalHost(calls: string[] = [], closeFailure?: Error, result?: QuietCommandResult): WorkspaceRemovalTerminalHost & {
   closedCwds: string[];
-  runOptions: RunTerminalCommandOptions[];
+  runOptions: QuietCommandOptions[];
+  runCommand: (input: QuietCommandOptions) => Promise<QuietCommandResult>;
 } {
   const closedCwds: string[] = [];
-  const runOptions: RunTerminalCommandOptions[] = [];
+  const runOptions: QuietCommandOptions[] = [];
   return {
     closedCwds,
     runOptions,
@@ -571,37 +569,14 @@ function terminalHost(calls: string[] = [], closeFailure?: Error): WorkspaceRemo
       if (closeFailure !== undefined) throw closeFailure;
       closedCwds.push(cwd);
     },
-    runCommand(options) {
+    runCommand(input) {
       calls.push("run");
-      runOptions.push(options);
-      return commandRun(options);
+      runOptions.push(input);
+      return Promise.resolve(result ?? { exitCode: 0, stdout: "", stderr: "", timedOut: false });
     },
   };
 }
 
-function commandRun(options: RunTerminalCommandOptions): TerminalCommandRun {
-  return {
-    id: "run-1",
-    origin: options.origin,
-    projectId: options.projectId,
-    workspaceId: options.workspaceId,
-    terminalId: "terminal-1",
-    title: options.title,
-    command: options.command,
-    status: "running",
-    createdAt: "2026-07-27T00:00:00.000Z",
-    metadata: requireStringMetadata(options.metadata),
-  };
-}
-
-function requireStringMetadata(value: unknown): Record<string, string> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Expected command metadata");
-  const entries = Object.entries(value);
-  if (!entries.every((entry): entry is [string, string] => typeof entry[1] === "string")) {
-    throw new Error("Expected string command metadata");
-  }
-  return Object.fromEntries(entries);
-}
 
 function readPrivateViewId(value: ProviderWorkspace["data"]): string | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;

@@ -1,7 +1,7 @@
 import { isSessionActive } from "../../../../shared/activity";
 import type { AppState } from "../../appState";
 import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../../sessionPersistence";
-import { canDeleteWorkspace, isWorkspaceDeletionPending } from "../../workspaceDeletion";
+import { canDeleteWorkspace } from "../../workspaceDeletion";
 import type { PluginAction } from "../types";
 
 export function createCoreActions(): PluginAction[] {
@@ -174,7 +174,9 @@ function hasWorkspace(context: { state: AppState }): boolean {
 
 function hasDeletableWorkspace(context: { state: AppState }): boolean {
   const workspace = context.state.selectedWorkspace;
-  return canDeleteWorkspace(workspace) && !isWorkspaceDeletionPending(context.state, workspace);
+  // Whether a removal is already in flight is the app's business: it owns the
+  // request, and it ignores a second click on its own.
+  return canDeleteWorkspace(workspace);
 }
 
 function hasSelectableSession(context: { state: AppState }): boolean {

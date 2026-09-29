@@ -685,6 +685,20 @@ export interface WorktreeSessionRequestBody {
   shared: boolean;
 }
 
+/**
+ * The branch a session's worktree was parked on when its session was archived.
+ *
+ * Recorded in the session file header, so the fact survives the archive and
+ * travels with the session. It is a historical note, not a claim about the
+ * present: the branch may have moved or been deleted since.
+ */
+export interface SessionDetachment {
+  /** Branch the worktree was attached to when it was detached. */
+  detachedFrom: string;
+  /** Commit the worktree was at when it was detached. */
+  detachedAt: string;
+}
+
 export interface SessionInfo extends SessionRef {
   path: string;
   /** True when the server has verified a backing session file exists; false when known transient. */
@@ -697,6 +711,8 @@ export interface SessionInfo extends SessionRef {
   parentSessionPath?: string;
   /** Present only for a session whose worktree PI WEB created. */
   worktree?: SessionWorktreeOwnership;
+  /** Present once this session's worktree has been detached by an archive. */
+  detachment?: SessionDetachment;
   archived?: boolean;
   archivedAt?: string;
 }

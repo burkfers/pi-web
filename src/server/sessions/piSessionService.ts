@@ -80,8 +80,8 @@ import type { SessionRouteRef, SessionRouteService } from "./sessionService.js";
 
 import { type AuthChange } from "./authService.js";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
-import type { SessionWorktreeOwnership } from "../../shared/apiTypes.js";
-import { patchSessionWorktreeOwnershipHeader, recordSessionWorktreeOwnership, rewriteSessionHeader, sessionWorktreeOwnershipFromHeader } from "./sessionWorktreeOwnership.js";
+import type { SessionDetachment, SessionWorktreeOwnership } from "../../shared/apiTypes.js";
+import { patchSessionDetachmentHeader, patchSessionWorktreeOwnershipHeader, recordSessionDetachment, recordSessionWorktreeOwnership, rewriteSessionHeader, sessionDetachmentFromHeader, sessionWorktreeOwnershipFromHeader } from "./sessionWorktreeOwnership.js";
 import { readSessionHeaderSummary } from "./sessionFileHeader.js";
 import type { WorkspaceActivityService } from "../activity/workspaceActivityService.js";
 import { createAskUserToolDefinition, type AskUserInvocation, type AskUserToolDeps } from "./askUserTool.js";
@@ -321,6 +321,8 @@ export interface PiSessionListEntry {
   cwd: string;
   /** Present when PI WEB created the worktree this session runs in. */
   worktree?: SessionWorktreeOwnership;
+  /** Present once this session's worktree has been detached by an archive. */
+  detachment?: SessionDetachment;
   created: Date;
   modified: Date;
   /**
@@ -3264,6 +3266,20 @@ export class PiSessionService implements SessionRouteService {
     patchSessionWorktreeOwnershipHeader(session.sessionManager.getHeader?.bind(session.sessionManager), { owned: true, createdAt: ownership.createdAt });
   }
 
+  /**
+   * Record that this session's worktree was released from a branch, so a
+   * resumed session can be told what happened while it was parked.
+   */
+  async recordDetachment(ref: PiSessionRef, detachment: SessionDetachment): Promise<void> {
+    const session = await this.getOrOpen(ref);
+    const sessionFile = session.sessionFile;
+    if (sessionFile !== undefined && sessionFile !== "" && sessionFileExists(sessionFile)) {
+      await recordSessionDetachment(sessionFile, detachment);
+      this.sessionManager.invalidateSessionFile(sessionFile);
+    }
+    patchSessionDetachmentHeader(session.sessionManager.getHeader?.bind(session.sessionManager), detachment);
+  }
+
   async detachParent(ref: PiSessionRef): Promise<void> {
     const session = await this.getOrOpen(ref);
     const sessionFile = session.sessionFile;
@@ -3438,7 +3454,17 @@ export class PiSessionService implements SessionRouteService {
     const sessionFile = session.sessionFile;
     if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
     const listed = (await this.sessionManager.list(cwd)).find((candidate) => candidate.id === session.sessionId);
-    if (listed !== undefined) return archiveInputFromListEntry(listed);
+    if (listed !== undefined) {
+      // A fact written to the header between the listing and the archive — a
+      // worktree released on the way in, most often — is in the runtime's
+      // header and not yet in the listing. The archive record is a cache of
+      // what the transcript says, so it takes whichever source has it rather
+      // than whichever was read first.
+      const detachment = sessionDetachmentFromHeader(session.sessionManager.getHeader?.());
+      return detachment === undefined
+        ? archiveInputFromListEntry(listed)
+        : { ...archiveInputFromListEntry(listed), detachment };
+    }
     return archiveInputFromActiveSession(session);
   }
 
@@ -4705,6 +4731,7 @@ function clientSessionFromListEntry(session: PiSessionListEntry): ClientSession 
     firstMessage: clientSessionFirstMessagePreview(session.firstMessage),
     ...(session.parentSessionPath === undefined ? {} : { parentSessionPath: session.parentSessionPath }),
     ...(session.worktree === undefined ? {} : { worktree: session.worktree }),
+    ...(session.detachment === undefined ? {} : { detachment: session.detachment }),
   };
 }
 
@@ -4729,6 +4756,7 @@ function archiveInputFromActiveSession(session: PiAgentSession): ArchiveSessionI
   const header = session.sessionManager.getHeader?.();
   const parentSessionPath = header?.parentSession;
   const worktree = sessionWorktreeOwnershipFromHeader(header);
+  const detachment = sessionDetachmentFromHeader(header);
   return {
     sessionId: session.sessionId,
     cwd: session.sessionManager.getCwd(),
@@ -4740,6 +4768,7 @@ function archiveInputFromActiveSession(session: PiAgentSession): ArchiveSessionI
     ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
     ...(worktree === undefined ? {} : { worktree }),
+    ...(detachment === undefined ? {} : { detachment }),
   };
 }
 
@@ -4759,6 +4788,7 @@ function archiveCandidateFromArchivedRecord(record: ArchivedSessionRecord, fallb
   if (path === undefined) return undefined;
   const parentSessionPath = record.parentSessionPath ?? fallback?.parentSessionPath;
   const worktree = record.worktree ?? fallback?.worktree;
+  const detachment = record.detachment ?? fallback?.detachment;
   return {
     id: record.sessionId,
     path,
@@ -4767,6 +4797,7 @@ function archiveCandidateFromArchivedRecord(record: ArchivedSessionRecord, fallb
     ...(fallback === undefined ? {} : { listEntry: fallback }),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
     ...(worktree === undefined ? {} : { worktree }),
+    ...(detachment === undefined ? {} : { detachment }),
   };
 }
 
@@ -4808,6 +4839,7 @@ function clientSessionFromArchivedRecord(record: ArchivedSessionRecord, fallback
   const name = record.name ?? fallback?.name;
   const parentSessionPath = record.parentSessionPath ?? fallback?.parentSessionPath;
   const worktree = record.worktree ?? fallback?.worktree;
+  const detachment = record.detachment ?? fallback?.detachment;
   return {
     id: record.sessionId,
     path,
@@ -4819,6 +4851,7 @@ function clientSessionFromArchivedRecord(record: ArchivedSessionRecord, fallback
     firstMessage: clientSessionFirstMessagePreview(firstMessage),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
     ...(worktree === undefined ? {} : { worktree }),
+    ...(detachment === undefined ? {} : { detachment }),
     archived: true,
     archivedAt: record.archivedAt,
   };

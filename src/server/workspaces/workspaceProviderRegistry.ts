@@ -5,6 +5,7 @@ import type {
   ProjectInput,
   ProviderClaim,
   ProviderCreateRequest,
+  ProviderDetachResult,
   ProviderWorkspace,
   WorkspaceCreatePlan,
   WorkspaceRemovalPresentation as ProviderWorkspaceRemovalPresentation,
@@ -35,7 +36,7 @@ export type {
 const DEFAULT_PROVIDER_TIMEOUT_MS = 10_000;
 
 type ProviderTier = WorkspaceProviderTier;
-type ProviderOperation = "probe" | "list" | "prepareRemove" | "prepareCreate" | "describeCreation";
+type ProviderOperation = "probe" | "list" | "prepareRemove" | "prepareCreate" | "describeCreation" | "detach";
 
 export interface WorkspaceProviderRegistryLogger {
   warn(details: Record<string, unknown>, message: string): void;
@@ -60,6 +61,23 @@ export interface WorkspaceProviderRemovalTarget {
   prepare(): Promise<WorkspaceRemovePlan>;
 }
 
+export interface WorkspaceProviderDetachTarget {
+  ownerPluginId: string;
+  target: WorkspaceListing;
+  /** Release the workspace from whatever it is attached to, in place. */
+  detach(signal?: AbortSignal): Promise<ProviderDetachResult>;
+}
+
+export type WorkspaceProviderDetachErrorCode =
+  | "owner-conflict"
+  | "owner-unavailable"
+  | "workspace-not-found"
+  | "detach-unavailable"
+  | "resolution-failed"
+  | "resolution-timeout"
+  | "detach-failed"
+  | "detach-timeout";
+
 export type WorkspaceProviderRemovalErrorCode =
   | "owner-conflict"
   | "owner-unavailable"
@@ -76,6 +94,19 @@ export class WorkspaceProviderRemovalError extends Error {
 
   constructor(
     readonly code: WorkspaceProviderRemovalErrorCode,
+    readonly statusCode: number,
+    message: string,
+    options: ErrorOptions = {},
+  ) {
+    super(message, options);
+  }
+}
+
+export class WorkspaceProviderDetachError extends Error {
+  override name = "WorkspaceProviderDetachError";
+
+  constructor(
+    readonly code: WorkspaceProviderDetachErrorCode,
     readonly statusCode: number,
     message: string,
     options: ErrorOptions = {},
@@ -354,6 +385,120 @@ export class WorkspaceProviderRegistry {
       );
     }
     throw providerRemovalError("owner-unavailable", 409, `No workspace provider currently owns project ${input.id}`);
+  }
+
+  /**
+   * Re-resolve one live owner before a workspace is detached in place.
+   *
+   * Detaching is the one workspace operation the host performs on a live
+   * workspace rather than on a path, so it resolves the same way removal does
+   * and then hands the decision to the provider that owns it.
+   */
+  async resolveDetach(
+    project: Project,
+    workspaceId: string,
+    signal?: AbortSignal,
+  ): Promise<WorkspaceProviderDetachTarget> {
+    this.assertAccepting();
+    const input = snapshotProject(project);
+    if (workspaceId === "") throw providerDetachError("workspace-not-found", 404, "Workspace not found");
+    const diagnostics: WorkspaceProviderDiagnostic[] = [];
+
+    for (const tier of ["primary", "fallback"] as const) {
+      const selection = await this.selectInTier(input, tier, diagnostics, signal);
+      if (selection.kind === "none") continue;
+      if (selection.kind === "conflict") {
+        throw providerDetachError(
+          "owner-conflict",
+          409,
+          `Workspace owner conflict prevents detaching: ${selection.pluginIds.join(", ")}`,
+        );
+      }
+
+      const contribution = selection.contribution;
+      let validated: ValidatedProviderWorkspace[];
+      try {
+        const listed: unknown = await this.runProviderOperation(
+          contribution.pluginId,
+          "list",
+          (operationSignal) => contribution.provider.list(input, operationSignal),
+          signal,
+        );
+        validated = await validateProviderWorkspaces(input, contribution, listed, this.pathInspector, false, signal);
+      } catch (error) {
+        if (signal?.aborted === true) throw abortError(signal);
+        this.throwIfShuttingDown();
+        if (error instanceof WorkspaceProviderTimeoutError) {
+          throw providerDetachError("resolution-timeout", 504, boundedErrorMessage(error), error);
+        }
+        throw providerDetachError(
+          "resolution-failed",
+          502,
+          `Server plugin ${contribution.pluginId} could not resolve workspaces for detaching: ${boundedErrorMessage(error)}`,
+          error,
+        );
+      }
+
+      const current = validated.find(({ workspace }) => workspace.id === workspaceId);
+      if (current === undefined) {
+        throw providerDetachError(
+          "workspace-not-found",
+          404,
+          `Workspace ${workspaceId} is stale or unavailable for detaching`,
+        );
+      }
+      const callback = contribution.provider.detach?.bind(contribution.provider);
+      if (callback === undefined) {
+        throw providerDetachError(
+          "detach-unavailable",
+          409,
+          `Server plugin ${contribution.pluginId} does not support detaching workspace ${workspaceId}`,
+        );
+      }
+
+      return Object.freeze({
+        ownerPluginId: contribution.pluginId,
+        target: current.workspace,
+        detach: async (operationSignal?: AbortSignal): Promise<ProviderDetachResult> => {
+          let value: unknown;
+          try {
+            value = await this.runProviderOperation(
+              contribution.pluginId,
+              "detach",
+              (boundedSignal) => callback(Object.freeze({
+                project: input,
+                workspace: current.providerWorkspace,
+                signal: boundedSignal,
+              })),
+              operationSignal,
+            );
+          } catch (error) {
+            if (operationSignal?.aborted === true) throw abortError(operationSignal);
+            this.throwIfShuttingDown();
+            if (error instanceof WorkspaceProviderTimeoutError) {
+              throw providerDetachError("detach-timeout", 504, boundedErrorMessage(error), error);
+            }
+            throw providerDetachError(
+              "detach-failed",
+              409,
+              `Server plugin ${contribution.pluginId} could not detach workspace ${workspaceId}: ${boundedErrorMessage(error)}`,
+              error,
+            );
+          }
+          return parseProviderDetachResult(value, contribution.pluginId);
+        },
+      });
+    }
+
+    const failedProbe = diagnostics.find(({ code }) => code === "probe-failed");
+    if (failedProbe !== undefined) {
+      throw providerDetachError(
+        "resolution-failed",
+        502,
+        `Workspace owner resolution failed before detaching: ${boundedErrorMessage(failedProbe.message)}`,
+      );
+    }
+    throw providerDetachError("owner-unavailable", 409, `No workspace provider currently owns project ${input.id}`);
   }
 
   /**
@@ -942,6 +1087,32 @@ function providerRemovalError(
   cause?: unknown,
 ): WorkspaceProviderRemovalError {
   return new WorkspaceProviderRemovalError(code, statusCode, message, cause === undefined ? {} : { cause });
+}
+
+function parseProviderDetachResult(value: unknown, pluginId: string): ProviderDetachResult {
+  if (!isRecord(value) || typeof value["detached"] !== "boolean") {
+    throw providerDetachError("detach-failed", 409, `Server plugin ${pluginId} returned an unusable detach result`);
+  }
+  if (!value["detached"]) {
+    if (value["unsupported"] === true) return Object.freeze({ detached: false, unsupported: true } as const);
+    const head = value["head"];
+    return Object.freeze({ detached: false, ...(typeof head === "string" && head !== "" ? { head } : {}) } as const);
+  }
+  const branch = value["branch"];
+  const head = value["head"];
+  if (typeof branch !== "string" || branch === "" || typeof head !== "string" || head === "") {
+    throw providerDetachError("detach-failed", 409, `Server plugin ${pluginId} detached a workspace without naming the branch and commit it left`);
+  }
+  return Object.freeze({ detached: true, branch, head } as const);
+}
+
+function providerDetachError(
+  code: WorkspaceProviderDetachErrorCode,
+  statusCode: number,
+  message: string,
+  cause?: unknown,
+): WorkspaceProviderDetachError {
+  return new WorkspaceProviderDetachError(code, statusCode, message, cause === undefined ? {} : { cause });
 }
 
 function providerCreationError(

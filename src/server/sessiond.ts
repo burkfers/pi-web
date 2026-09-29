@@ -46,6 +46,7 @@ import { resolveProjectWorktreeDirectory } from "./workspaces/worktreeRoot.js";
 import { loadEffectiveProjectWorktreesConfig } from "./workspaces/projectPiWebConfig.js";
 import { WorktreeSessionService } from "./sessions/worktreeSessionService.js";
 import { registerWorktreeSessionRoutes } from "./sessiond/worktreeSessionRoutes.js";
+import { withWorktreeArchive, type WorktreeArchiveHost } from "./sessions/worktreeArchiveGuard.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
 import { DefaultPiPackageProvider, PiWebPluginCatalog } from "./piWebPluginCatalog.js";
@@ -377,17 +378,61 @@ async function createSessionDaemonRuntime() {
       removeTerminal: (terminalId, cwd) => { workspaceActivity.removeTerminal(terminalId, cwd); },
     });
     const workspaceRemovals = new WorkspaceRemovalService(workspaceProviders, terminals, { notices: serverNotices });
-    const workspaceCreations = new WorkspaceCreationService(workspaceProviders, terminals, {
+    const workspaceCreations = new WorkspaceCreationService(workspaceProviders, {
       notices: serverNotices,
       worktreeDirectory: (projectPath) => resolveProjectWorktreeDirectory(projectPath, config),
     });
+    // Parking a session releases the branch its worktree was holding. Only a
+    // worktree PI WEB created is touched: a checkout the user made is theirs.
+    const archiveGuardHost: WorktreeArchiveHost = {
+      findSession: async (ref) => (await sessions.list(ref.cwd)).find((session) => session.id === ref.id),
+      // A session's worktree is usually *outside* its project's directory —
+      // that is the point of a configurable worktree root — so the owning
+      // project is the one whose workspace list contains this path, not the one
+      // whose directory contains it. The path check stays as a fallback for a
+      // project whose workspaces are not provider-described.
+      projectForWorkspace: async (workspacePath) => {
+        const known = await projects.list();
+        for (const project of known) {
+          if (workspacePath === project.path || workspacePath.startsWith(`${project.path}/`)) return project;
+        }
+        for (const project of known) {
+          const resolution = await workspaceProviders.resolve(project).catch(() => undefined);
+          const owns = resolution?.workspaces.some((workspace) => workspace.path === workspacePath) === true;
+          if (owns) return project;
+        }
+        return undefined;
+      },
+      detachWorktree: async (project, workspacePath) => {
+        const resolution = await workspaceProviders.resolve(project);
+        const workspace = resolution.workspaces.find((candidate) => candidate.path === workspacePath);
+        if (workspace === undefined) return "unsupported";
+        const target = await workspaceProviders.resolveDetach(project, workspace.id);
+        const outcome = await target.detach();
+        if (outcome.detached) return { detachedFrom: outcome.branch, detachedAt: outcome.head };
+        return "unsupported" in outcome ? "unsupported" : "already-detached";
+      },
+      recordDetachment: (ref, detachment) => sessions.recordDetachment(ref, detachment),
+      // Removing a deleted session's worktree is the ordinary workspace
+      // removal — same host orchestration, pre-remove hook, and visible run.
+      // The confirmation is re-derived from the live owner rather than reused,
+      // because the user's confirmation was of the session deletion, which
+      // states the worktree goes with it; there is no separate confirmation to
+      // bind a stale precondition to.
+      removeWorktree: async (project, workspacePath) => {
+        const resolution = await workspaceProviders.resolve(project);
+        const workspace = resolution.workspaces.find((candidate) => candidate.path === workspacePath);
+        if (workspace?.removal === undefined) return;
+        await workspaceRemovals.remove(project, workspace.id, workspace.removal.precondition);
+      },
+    };
     const worktreeSessions = new WorktreeSessionService({
       projects,
       creations: {
         preview: (project, request, signal) => workspaceCreations.preview(project, request, signal),
-        create: async (project, request, precondition, signal) => {
-          await workspaceCreations.create(project, request, precondition, signal);
-        },
+        // Creation runs and waits: a session's working directory is fixed for
+        // its lifetime, so its worktree has to exist before the session does.
+        create: (project, request, precondition, signal) => workspaceCreations.create(project, request, precondition, signal),
       },
       sessions: {
         start: (cwd) => sessions.start(cwd),
@@ -400,6 +445,7 @@ async function createSessionDaemonRuntime() {
       // exactly what the user needs to be told when a start fails.
       workspaceExists: async (path) => await stat(path).then((stats) => stats.isDirectory(), () => false),
     });
+    const routedSessions = withWorktreeArchive(sessions, archiveGuardHost);
     const runtimeComponent = Object.freeze({
       // The deprecated-input report is fixed at startup: it was detected from
       // the captured pre-scrub daemon environment and the config snapshot this
@@ -444,7 +490,7 @@ async function createSessionDaemonRuntime() {
       attribution: statusAttribution,
       workspaceActivity,
     });
-    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, workspaceCreations, worktreeSessions, shutdown };
+    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions: routedSessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, projectActivity, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, workspaceCreations, worktreeSessions, shutdown };
   } catch (error) {
     await projectLifecycleForFailedConstruction?.closeAll();
     try {

@@ -57,6 +57,8 @@ import {
   parseThinkingLevelsResponse,
   parseWriteWorkspaceFileResponse,
   parseWorkspaceCreationPreview,
+  parseWorkspaceCreationResult,
+  parseWorkspaceRemovalResult,
   parseWorktreeSessionResponse,
   parseWorkspaceProviderResolution,
   parseWorkspaceTrustResponse,
@@ -203,14 +205,14 @@ export const workspacesApi = {
   ),
   createWorkspace: (projectId: string, body: WorkspaceCreationRequest, machineId = "local") => request(
     `${machinePrefix(machineId)}/projects/${encodeURIComponent(projectId)}/workspace-creations`,
-    (value): unknown => value,
+    parseWorkspaceCreationResult,
     { method: "POST", body: JSON.stringify(body) },
   ),
   deleteWorkspace: (projectId: string, workspaceId: string, precondition: string, machineId = "local") => {
     const body: WorkspaceRemovalRequest = { precondition };
     return request(
       `${machinePrefix(machineId)}/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}`,
-      (value): unknown => value,
+      parseWorkspaceRemovalResult,
       { method: "DELETE", body: JSON.stringify(body) },
     );
   },

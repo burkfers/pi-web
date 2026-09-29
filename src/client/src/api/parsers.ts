@@ -326,6 +326,24 @@ export function parseSessionInfo(value: unknown): SessionInfo {
   };
 }
 
+/**
+ * A completed creation. The request resolves only once the worktree exists, so
+ * the answer is the fact and the path it was created at — there is no run to
+ * watch in the meantime.
+ */
+export function parseWorkspaceCreationResult(value: unknown): { created: true; path: string } {
+  const record = requireRecord(value);
+  if (record["created"] !== true) throw new Error("Expected a completed workspace creation");
+  return { created: true, path: requireString(record, "path") };
+}
+
+/** A completed removal: the worktree is gone, which is the whole answer. */
+export function parseWorkspaceRemovalResult(value: unknown): { removed: true } {
+  const record = requireRecord(value);
+  if (record["removed"] !== true) throw new Error("Expected a completed workspace removal");
+  return { removed: true };
+}
+
 export function parseWorktreeSessionResponse(value: unknown): WorktreeSessionResponse {
   const record = requireRecord(value);
   const worktree = record["worktree"];

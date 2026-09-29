@@ -57,14 +57,7 @@ import { loadChatGroupExpansion, saveChatGroupExpansion } from "../chatGroupExpa
 import { loadThinkingExpansion, saveThinkingExpansion } from "../chatThinkingExpansion";
 import { resolveVisibleNavigationSection } from "../appShell/navigationState";
 import "./appShell/NavigationDialog";
-import { canDeleteWorkspace, isWorkspaceDeletionPending, isWorkspaceDeletionRunPending, latestWorkspaceDeletionRuns, pendingWorkspaceDeletionIds, targetWorkspaceIdForRun, workspaceDeletionRunFilter, workspaceRemovalConfirmation } from "../workspaceDeletion";
-import {
-  createdWorkspacePathForRun,
-  isWorkspaceCreationRunPending,
-  isWorkspaceCreationRunSucceeded,
-  latestWorkspaceCreationRun,
-  workspaceCreationRunFilter,
-} from "../workspaceCreation";
+import { canDeleteWorkspace, workspaceRemovalConfirmation } from "../workspaceDeletion";
 import type { WorkspaceCreateSubmission } from "./WorkspaceCreateDialog";
 import "./WorkspaceCreateDialog";
 import "./MachineList";
@@ -105,16 +98,13 @@ const PI_WEB_STATUS_REFRESH_MS = 15 * 60 * 1000;
 const SELECTED_SESSION_REFRESH_MS = 5_000;
 const PI_WEB_STATUS_DEFER_MS = 750;
 const REMOTE_ROUTE_RESTORE_RETRY_DELAYS_MS = [1_000, 3_000, 8_000, 15_000, 30_000] as const;
-const WORKSPACE_DELETION_RECONCILE_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000] as const;
 const GLOBAL_SHORTCUT_LISTENER_OPTIONS = { capture: true } as const;
 const THEME_AUTO_ON_VALUE = "auto:on";
 const THEME_AUTO_OFF_VALUE = "auto:off";
 const THEME_OPTION_PREFIX = "theme:";
 const TERMINAL_PANEL_LOCAL_ID = "workspace.terminal";
 /** How often a creation run is re-read while it runs. */
-const WORKSPACE_CREATION_RUN_POLL_MS = 700;
 /** Upper bound on following one creation run before the UI stops waiting. */
-const WORKSPACE_CREATION_RUN_TIMEOUT_MS = 60_000;
 const MIN_RESIZABLE_CHAT_WIDTH_PX = 320;
 const PANEL_EDGE_COLUMNS_WIDTH_PX = 2;
 const NAVIGATION_SCOPES = ["machine", "project", "workspace", "session", "tool", "view"] as const;
@@ -291,13 +281,6 @@ export class PiWebApp extends LitElement {
   private piWebStatusTimer: number | undefined;
   private selectedSessionRefreshTimer: number | undefined;
   private piWebStatusDeferredTimer: number | undefined;
-  private workspaceDeletionPollTimer: number | undefined;
-  private workspaceDeletionRefreshAbort: AbortController | undefined;
-  private workspaceDeletionRefreshScope: string | undefined;
-  private workspaceDeletionRefreshQueued = false;
-  private workspaceDeletionRefreshGeneration = 0;
-  private readonly workspaceDeletionReconcileRetries = new Map<string, { attempt: number; retryAt: number }>();
-  private readonly handledWorkspaceDeletionRunIds = new Set<string>();
   @state() private workspaceCreateAnchor: HTMLElement | undefined = undefined;
   @state() private creatingWorkspace = false;
   private workspaceCreationGeneration = 0;
@@ -513,7 +496,6 @@ export class PiWebApp extends LitElement {
     if (this.selectedSessionRefreshTimer !== undefined) window.clearTimeout(this.selectedSessionRefreshTimer);
     this.selectedSessionRefreshTimer = undefined;
     this.clearScheduledPiWebStatusRefresh();
-    this.cancelWorkspaceDeletionRefresh();
     this.clearPendingRemoteRouteRestore();
     super.disconnectedCallback();
   }
@@ -522,10 +504,6 @@ export class PiWebApp extends LitElement {
     if (!patchChangesState(this.state, patch)) return;
     const previous = this.state;
     this.state = { ...this.state, ...patch };
-    if (workspaceDeletionScopeKey(previous) !== workspaceDeletionScopeKey(this.state)) {
-      this.cancelWorkspaceDeletionRefresh();
-      if (Object.keys(this.state.workspaceDeletionRuns).length > 0) this.state = { ...this.state, workspaceDeletionRuns: {} };
-    }
     if (modelValueFromStatus(previous.status) !== modelValueFromStatus(this.state.status) && this.state.modelDialog !== undefined) {
       this.state = { ...this.state, modelDialog: undefined };
     }
@@ -552,7 +530,6 @@ export class PiWebApp extends LitElement {
     if (!this.routeLocationMatchesUrl(route)) {
       await this.projects.loadProjects();
       await this.withChatScrollTransition(async () => { await this.restoreRoute(false); });
-      await this.refreshWorkspaceDeletionRuns();
       return;
     }
     const initialRouteMachineHealth = this.state.machineStatuses[route.machineId ?? "local"];
@@ -562,7 +539,6 @@ export class PiWebApp extends LitElement {
     // route to reconciliation while it is still the current destination.
     if (!this.routeLocationMatchesUrl(route)) {
       await this.withChatScrollTransition(async () => { await this.restoreRoute(false); });
-      await this.refreshWorkspaceDeletionRuns();
       return;
     }
     await this.withChatScrollTransition(() => this.restoreRouteFor(route, false));
@@ -571,7 +547,6 @@ export class PiWebApp extends LitElement {
       this.clearPendingRemoteRouteRestore();
       this.rememberCurrentMachineNavigation();
     }
-    await this.refreshWorkspaceDeletionRuns();
   }
 
   private handleBrowserResumeSignal(): void {
@@ -586,7 +561,6 @@ export class PiWebApp extends LitElement {
       this.sessions.refreshSelectedSession(),
       this.sessions.refreshCurrentWorkspaceSessions(),
       this.refreshMachineStatusSnapshots(),
-      this.refreshWorkspaceDeletionRuns(),
       this.refreshCurrentWorkspaceSurface(),
       this.workspaces.refreshSelectedProjectTopology(),
     ]);
@@ -668,7 +642,6 @@ export class PiWebApp extends LitElement {
         this.sessions.refreshSelectedSession(),
         this.refreshMachineStatusSnapshots(),
         this.loadClientConfig(),
-        this.refreshWorkspaceDeletionRuns(),
         this.refreshCurrentWorkspaceSurface(),
         this.workspaces.refreshSelectedProjectTopology(),
       ]);
@@ -1054,7 +1027,6 @@ export class PiWebApp extends LitElement {
       if (!this.pendingRemoteRouteRestoreStillCurrent(route)) return;
       this.clearPendingRemoteRouteRestore();
       this.rememberCurrentMachineNavigation();
-      await this.refreshWorkspaceDeletionRuns();
     } finally {
       this.remoteRouteRestoreInProgress = false;
     }
@@ -1515,9 +1487,7 @@ export class PiWebApp extends LitElement {
     const gatewayPluginsLoading = this.gatewayPluginLoadPromise !== undefined && !this.gatewayPluginLoadAttemptComplete;
     if ((!this.routeRestoreInProgress || next.selectedWorkspace !== undefined) && !gatewayPluginsLoading) this.reconcileWorkspacePanelSelection();
     if (!this.routeRestoreInProgress) this.rememberCurrentMachineNavigation();
-    if (next.selectedWorkspace === undefined) return;
-    void this.refreshWorkspaceDeletionRuns();
-    this.refreshSelectedWorkspaceTool(this.state.workspaceTool);
+    if (next.selectedWorkspace !== undefined) this.refreshSelectedWorkspaceTool(this.state.workspaceTool);
   }
 
   private syncSessionUnreadMachines(): void {
@@ -1852,7 +1822,12 @@ export class PiWebApp extends LitElement {
     cancelKeyboardNavigation: () => { void this.focusChatComposer(); },
   };
 
-  private workspaceDeletionInput: AppState["workspaceDeletionRuns"] | undefined;
+  /**
+   * Removals in flight. The request is awaited, so this is a set of pending
+   * workspace ids rather than terminal runs to poll: a worktree being removed is
+   * pending for as long as its request has not settled.
+   */
+  private readonly workspaceRemovalsInFlight = new Set<string>();
   private deletingWorkspaceIds: string[] = [];
   private cachedProjectOrder:
     | { projects: readonly Project[]; activityAt: Readonly<Record<string, string>>; selectedId: string | undefined; ordered: Project[] }
@@ -1878,10 +1853,10 @@ export class PiWebApp extends LitElement {
   }
 
   private renderNavigationPanel() {
-    if (this.workspaceDeletionInput !== this.state.workspaceDeletionRuns) {
-      this.workspaceDeletionInput = this.state.workspaceDeletionRuns;
-      this.deletingWorkspaceIds = pendingWorkspaceDeletionIds(this.state.workspaceDeletionRuns);
-    }
+    // A fresh array on every render would look like a change to the list, and a
+    // transcript streaming in would re-render the navigation with it.
+    const removing = [...this.workspaceRemovalsInFlight].sort();
+    if (removing.join("\u0000") !== this.deletingWorkspaceIds.join("\u0000")) this.deletingWorkspaceIds = removing;
     return html`
       <app-navigation-panel
         .hiddenSections=${this.navigationPreferences.hiddenSections}
@@ -2791,7 +2766,6 @@ export class PiWebApp extends LitElement {
     this.invalidateWorkspaceSurface();
     this.loadedMachinePluginIds.delete(machineId);
     if (selectedMachineId(this.state) !== machineId) return;
-    this.cancelWorkspaceDeletionRefresh();
     this.setState({ workspaceDeletionRuns: {} });
   }
 
@@ -2907,8 +2881,10 @@ export class PiWebApp extends LitElement {
     this.creatingWorkspace = true;
 
     try {
-      const composition = this.requiredTerminalComposition(machineId);
-      const run = composition.facade.parseCommandRun(await workspacesApi.createWorkspace(
+      // The dialog already showed the exact command and waited for confirmation,
+      // so the request is made and awaited: the worktree exists when this
+      // returns, or the failure says why. There is no run to watch in between.
+      const created = await workspacesApi.createWorkspace(
         project.id,
         {
           name: submission.name,
@@ -2917,23 +2893,11 @@ export class PiWebApp extends LitElement {
           precondition: submission.preview.precondition,
         },
         machineId,
-      ));
-      const targetPath = createdWorkspacePathForRun(run);
-      if (targetPath === undefined) throw new Error("The creation run did not report the workspace it creates");
-      const sourceWorkspace = await this.workspaceForCommandRun(run, machineId);
-      if (sourceWorkspace !== undefined) {
-        this.workspaceTerminal("core", sourceWorkspace, machineId).open({ terminalId: run.terminalId });
-      }
-
-      const completed = await this.awaitWorkspaceCreationRun(run, machineId, isCurrent);
-      if (!isCurrent() || completed === undefined) return;
-      if (!isWorkspaceCreationRunSucceeded(completed)) {
-        this.browserErrors.report(scope, "Workspace creation failed. See the workspace terminal output.");
-        return;
-      }
-      await this.selectCreatedWorkspace(project.id, targetPath, machineId, isCurrent);
+      );
+      if (!isCurrent()) return;
+      await this.selectCreatedWorkspace(project.id, created.path, machineId, isCurrent);
     } catch (error) {
-      if (isCurrent()) this.browserErrors.report(scope, `Failed to start workspace creation: ${errorMessage(error)}`);
+      if (isCurrent()) this.browserErrors.report(scope, `Workspace creation failed: ${errorMessage(error)}`);
     } finally {
       if (generation === this.workspaceCreationGeneration) this.creatingWorkspace = false;
     }
@@ -2943,32 +2907,6 @@ export class PiWebApp extends LitElement {
    * Polls the host's own command run until it settles. The run is the record of
    * what happened, so the UI never has to guess whether the workspace appeared.
    */
-  private async awaitWorkspaceCreationRun(
-    run: TerminalCommandRun,
-    machineId: string,
-    isCurrent: () => boolean,
-  ): Promise<TerminalCommandRun | undefined> {
-    const deadline = Date.now() + WORKSPACE_CREATION_RUN_TIMEOUT_MS;
-    let latest = run;
-    while (isWorkspaceCreationRunPending(latest) && Date.now() < deadline && isCurrent()) {
-      await delay(WORKSPACE_CREATION_RUN_POLL_MS);
-      if (!isCurrent()) return undefined;
-      try {
-        const composition = this.requiredTerminalComposition(machineId);
-        const peer = createPluginPeer(composition.binding, { id: run.workspaceId, projectId: run.projectId }, machineId);
-        if (peer === undefined) return latest;
-        const runs = await composition.facade.listCommandRuns({ peer, filter: workspaceCreationRunFilter() });
-        const observed = latestWorkspaceCreationRun(runs, run.id);
-        if (observed !== undefined) latest = observed;
-      } catch (error) {
-        // A failed status read is not a failed creation: keep waiting for the
-        // deadline rather than reporting an error the run may not have had.
-        console.warn("Failed to read workspace creation run status", error);
-      }
-    }
-    return latest;
-  }
-
   private async selectCreatedWorkspace(
     projectId: string,
     path: string,
@@ -3005,27 +2943,35 @@ export class PiWebApp extends LitElement {
       this.browserErrors.report(scope, "Workspace removal is not available");
       return;
     }
-    if (isWorkspaceDeletionPending(this.state, workspace)) return;
+    if (this.workspaceRemovalsInFlight.has(workspace.id)) return;
     const removal = workspace.removal;
     const confirmation = workspaceRemovalConfirmation(workspace);
     if (removal === undefined || confirmation === undefined || !confirm(confirmation)) return;
 
-    const expected = navigationUrlContext(this.beginNavigationOperation(ROUTE_RESTORE_SCOPE));
+    // The confirmation dialog already said what would be deleted, including any
+    // commits only this worktree holds, so the request is made and awaited: the
+    // worktree is gone when this returns, or the failure says why.
+    this.beginWorkspaceRemoval(workspace.id);
     try {
-      const composition = this.requiredTerminalComposition(machineId);
-      const run = composition.facade.parseCommandRun(await workspacesApi.deleteWorkspace(
-        workspace.projectId,
-        workspace.id,
-        removal.precondition,
-        machineId,
-      ));
-      if (!this.recordWorkspaceDeletionRun(run, machineId)) return;
-      const commandWorkspace = await this.workspaceForCommandRun(run, machineId);
-      if (selectedMachineId(this.state) !== machineId || !this.navigationUrlContextMatchesUrl(expected)) return;
-      if (commandWorkspace !== undefined) this.workspaceTerminal("core", commandWorkspace, machineId).open({ terminalId: run.terminalId });
+      await workspacesApi.deleteWorkspace(workspace.projectId, workspace.id, removal.precondition, machineId);
+      // The worktree is gone, so the checkout it was selected from no longer
+      // exists: move the selection rather than leaving it pointing at nothing.
+      await this.workspaces.refreshAfterWorkspaceDeleted(workspace.projectId, workspace.id, machineId);
     } catch (error) {
       await this.reportWorkspaceRemovalFailure(workspace, machineId, scope, error);
+    } finally {
+      this.endWorkspaceRemoval(workspace.id);
     }
+  }
+
+  private beginWorkspaceRemoval(workspaceId: string): void {
+    this.workspaceRemovalsInFlight.add(workspaceId);
+    this.requestUpdate();
+  }
+
+  private endWorkspaceRemoval(workspaceId: string): void {
+    this.workspaceRemovalsInFlight.delete(workspaceId);
+    this.requestUpdate();
   }
 
   private async reportWorkspaceRemovalFailure(workspace: Workspace, machineId: string, scope: BrowserErrorScope, error: unknown): Promise<void> {
@@ -3057,203 +3003,6 @@ export class PiWebApp extends LitElement {
     }
     if (selectedMachineId(this.state) !== machineId || this.state.selectedProject?.id !== run.projectId) return undefined;
     return workspaces.find((workspace) => workspace.id === run.workspaceId);
-  }
-
-  private recordWorkspaceDeletionRun(run: TerminalCommandRun, machineId: string): boolean {
-    if (selectedMachineId(this.state) !== machineId || this.state.selectedProject?.id !== run.projectId) return false;
-    const workspaceId = targetWorkspaceIdForRun(run);
-    if (workspaceId === undefined) return false;
-    this.setState({ workspaceDeletionRuns: { ...this.state.workspaceDeletionRuns, [workspaceId]: run } });
-    this.updateWorkspaceDeletionPolling();
-    return true;
-  }
-
-  private async refreshWorkspaceDeletionRuns(): Promise<void> {
-    const machineId = selectedMachineId(this.state);
-    const project = this.state.selectedProject;
-    const scope = workspaceDeletionScopeKey(this.state);
-    if (project === undefined || scope === undefined || !this.terminalAvailableForMachine(machineId)) {
-      this.cancelWorkspaceDeletionRefresh();
-      this.setState({ workspaceDeletionRuns: {} });
-      return;
-    }
-    if (this.workspaceDeletionRefreshAbort !== undefined) {
-      if (this.workspaceDeletionRefreshScope === scope) {
-        this.workspaceDeletionRefreshQueued = true;
-        return;
-      }
-      this.cancelWorkspaceDeletionRefresh();
-    }
-
-    const controller = new AbortController();
-    const generation = ++this.workspaceDeletionRefreshGeneration;
-    this.workspaceDeletionRefreshAbort = controller;
-    this.workspaceDeletionRefreshScope = scope;
-    try {
-      const initiallyTrackedRuns = Object.values(this.state.workspaceDeletionRuns)
-        .filter((run) => run.projectId === project.id);
-      for (const run of initiallyTrackedRuns) {
-        if (!isWorkspaceDeletionRunPending(run)) {
-          await this.handleCompletedWorkspaceDeletionRun(run, machineId, project.id, generation, controller);
-        }
-      }
-      if (!this.workspaceDeletionRefreshIsCurrent(machineId, project.id, generation, controller)) return;
-
-      const trackedRuns = Object.values(this.state.workspaceDeletionRuns)
-        .filter((run) => run.projectId === project.id);
-      const pendingRuns = trackedRuns.filter(isWorkspaceDeletionRunPending);
-      if (initiallyTrackedRuns.length > 0 && pendingRuns.length === 0) return;
-
-      const composition = this.requiredTerminalComposition(machineId);
-      const filter = workspaceDeletionRunFilter();
-      const queryWorkspaces: Pick<Workspace, "id" | "projectId">[] = pendingRuns.length === 0
-        ? this.state.workspaces.filter((workspace) => workspace.projectId === project.id)
-        : [...new Map(pendingRuns.map((run) => [run.workspaceId, { id: run.workspaceId, projectId: run.projectId }])).values()];
-      const results = await Promise.allSettled(queryWorkspaces.map(async (workspace) => {
-        const peer = createPluginPeer(composition.binding, workspace, machineId);
-        if (peer === undefined) throw requiredTerminalUnavailableError(machineId);
-        return composition.facade.listCommandRuns({
-          peer,
-          filter: { metadata: filter.metadata },
-          signal: controller.signal,
-        });
-      }));
-      if (!this.workspaceDeletionRefreshIsCurrent(machineId, project.id, generation, controller)) return;
-      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
-      const successfulRuns = results.filter((result): result is PromiseFulfilledResult<TerminalCommandRun[]> => result.status === "fulfilled");
-      if (successfulRuns.length === 0 && failures.length > 0) throw failures[0]?.reason;
-      for (const failure of failures) console.warn("Failed to query workspace deletion runs for one workspace", failure.reason);
-      const failedWorkspaceIds = new Set(results.flatMap((result, index) => {
-        const failedWorkspace = result.status === "rejected" ? queryWorkspaces[index] : undefined;
-        return failedWorkspace === undefined ? [] : [failedWorkspace.id];
-      }));
-      const retainedPendingRuns = Object.values(this.state.workspaceDeletionRuns).filter((run) =>
-        run.projectId === project.id && isWorkspaceDeletionRunPending(run) && failedWorkspaceIds.has(run.workspaceId));
-      const discoveredRuns = [...successfulRuns.flatMap((result) => result.value), ...retainedPendingRuns]
-        .filter((run) => !this.handledWorkspaceDeletionRunIds.has(machineScopedKey(machineId, run.id)));
-      const latestRuns = latestWorkspaceDeletionRuns(discoveredRuns);
-      this.setState({ workspaceDeletionRuns: latestRuns });
-      for (const run of Object.values(latestRuns)) {
-        if (!isWorkspaceDeletionRunPending(run)) {
-          await this.handleCompletedWorkspaceDeletionRun(run, machineId, project.id, generation, controller);
-        }
-      }
-    } catch (error) {
-      if (!controller.signal.aborted && this.workspaceDeletionRefreshIsCurrent(machineId, project.id, generation, controller)) {
-        console.warn("Failed to refresh workspace deletion runs", error);
-      }
-    } finally {
-      if (this.workspaceDeletionRefreshAbort === controller) {
-        this.workspaceDeletionRefreshAbort = undefined;
-        this.workspaceDeletionRefreshScope = undefined;
-        const refreshQueued = this.workspaceDeletionRefreshQueued;
-        this.workspaceDeletionRefreshQueued = false;
-        if (refreshQueued && workspaceDeletionScopeKey(this.state) === scope) {
-          if (this.workspaceDeletionPollTimer !== undefined) window.clearTimeout(this.workspaceDeletionPollTimer);
-          this.workspaceDeletionPollTimer = undefined;
-          queueMicrotask(() => { void this.refreshWorkspaceDeletionRuns(); });
-        } else {
-          this.updateWorkspaceDeletionPolling();
-        }
-      }
-    }
-  }
-
-  private workspaceDeletionRefreshIsCurrent(
-    machineId: string,
-    projectId: string,
-    generation: number,
-    controller: AbortController,
-  ): boolean {
-    return this.workspaceDeletionRefreshAbort === controller
-      && !controller.signal.aborted
-      && generation === this.workspaceDeletionRefreshGeneration
-      && selectedMachineId(this.state) === machineId
-      && this.state.selectedProject?.id === projectId;
-  }
-
-  private cancelWorkspaceDeletionRefresh(): void {
-    this.workspaceDeletionRefreshGeneration += 1;
-    this.workspaceDeletionRefreshAbort?.abort(new DOMException("Workspace deletion scope changed", "AbortError"));
-    this.workspaceDeletionRefreshAbort = undefined;
-    this.workspaceDeletionRefreshScope = undefined;
-    this.workspaceDeletionRefreshQueued = false;
-    this.workspaceDeletionReconcileRetries.clear();
-    if (this.workspaceDeletionPollTimer !== undefined) window.clearTimeout(this.workspaceDeletionPollTimer);
-    this.workspaceDeletionPollTimer = undefined;
-  }
-
-  private updateWorkspaceDeletionPolling(): void {
-    const machineId = selectedMachineId(this.state);
-    const now = Date.now();
-    let nextDelay = Number.POSITIVE_INFINITY;
-    for (const run of Object.values(this.state.workspaceDeletionRuns)) {
-      const runKey = machineScopedKey(machineId, run.id);
-      if (this.handledWorkspaceDeletionRunIds.has(runKey)) continue;
-      if (isWorkspaceDeletionRunPending(run)) {
-        nextDelay = Math.min(nextDelay, 1_000);
-        continue;
-      }
-      const retryAt = this.workspaceDeletionReconcileRetries.get(runKey)?.retryAt ?? now;
-      nextDelay = Math.min(nextDelay, Math.max(0, retryAt - now));
-    }
-    if (Number.isFinite(nextDelay) && this.workspaceDeletionPollTimer === undefined) {
-      this.workspaceDeletionPollTimer = window.setTimeout(() => {
-        this.workspaceDeletionPollTimer = undefined;
-        void this.refreshWorkspaceDeletionRuns();
-      }, nextDelay);
-      return;
-    }
-    if (!Number.isFinite(nextDelay) && this.workspaceDeletionPollTimer !== undefined) {
-      window.clearTimeout(this.workspaceDeletionPollTimer);
-      this.workspaceDeletionPollTimer = undefined;
-    }
-  }
-
-  private async handleCompletedWorkspaceDeletionRun(
-    run: TerminalCommandRun,
-    machineId: string,
-    projectId: string,
-    generation: number,
-    controller: AbortController,
-  ): Promise<void> {
-    if (!this.workspaceDeletionRefreshIsCurrent(machineId, projectId, generation, controller)) return;
-    const runKey = machineScopedKey(machineId, run.id);
-    if (this.handledWorkspaceDeletionRunIds.has(runKey)) return;
-    const workspaceId = targetWorkspaceIdForRun(run);
-    if (workspaceId === undefined) return;
-
-    if (run.status === "succeeded") {
-      const retry = this.workspaceDeletionReconcileRetries.get(runKey);
-      if (retry !== undefined && retry.retryAt > Date.now()) return;
-      const errorScope = workspaceBrowserErrorScope(machineId, run.projectId, workspaceId);
-      try {
-        await this.workspaces.refreshAfterWorkspaceDeleted(run.projectId, workspaceId, machineId, {
-          signal: controller.signal,
-          isCurrent: () => this.workspaceDeletionRefreshIsCurrent(machineId, projectId, generation, controller),
-        });
-      } catch (error) {
-        if (!this.workspaceDeletionRefreshIsCurrent(machineId, projectId, generation, controller)) return;
-        const attempt = (retry?.attempt ?? 0) + 1;
-        const delay = WORKSPACE_DELETION_RECONCILE_RETRY_DELAYS_MS[
-          Math.min(attempt - 1, WORKSPACE_DELETION_RECONCILE_RETRY_DELAYS_MS.length - 1)
-        ] ?? 10_000;
-        this.workspaceDeletionReconcileRetries.set(runKey, { attempt, retryAt: Date.now() + delay });
-        this.browserErrors.report(errorScope, `Workspace removal succeeded, but refreshing the workspace list failed: ${errorMessage(error)}. Retrying…`);
-        return;
-      }
-      if (!this.workspaceDeletionRefreshIsCurrent(machineId, projectId, generation, controller)) return;
-      this.workspaceDeletionReconcileRetries.delete(runKey);
-      this.handledWorkspaceDeletionRunIds.add(runKey);
-      this.browserErrors.discard(errorScope);
-      this.setState({ workspaceDeletionRuns: omitWorkspaceDeletionRun(this.state.workspaceDeletionRuns, workspaceId) });
-      return;
-    }
-
-    if (run.status === "failed") {
-      this.workspaceDeletionReconcileRetries.delete(runKey);
-      this.handledWorkspaceDeletionRunIds.add(runKey);
-    }
   }
 
   private openMachineDialog(): void {
@@ -4024,16 +3773,6 @@ function workspaceRouteIdentity(route: Pick<AppRoute, "machineId" | "projectId" 
   return { machineId: route.machineId ?? "local", projectId: route.projectId, workspaceId: route.workspaceId };
 }
 
-function machineScopedKey(machineId: string, value: string): string {
-  return JSON.stringify([machineId, value]);
-}
-
-function workspaceDeletionScopeKey(state: Pick<AppState, "selectedMachine" | "selectedProject">): string | undefined {
-  const projectId = state.selectedProject?.id;
-  if (projectId === undefined) return undefined;
-  return JSON.stringify([state.selectedMachine?.id ?? "local", projectId]);
-}
-
 function sameWorkspaceRouteIdentity(left: WorkspaceRouteIdentity, right: WorkspaceRouteIdentity): boolean {
   return left.machineId === right.machineId
     && left.projectId === right.projectId
@@ -4101,16 +3840,9 @@ function requiredTerminalPluginBinding(registration: PiWebPluginRegistration, ma
   });
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => { setTimeout(resolve, ms); });
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function omitWorkspaceDeletionRun(runs: Record<string, TerminalCommandRun>, workspaceId: string): Record<string, TerminalCommandRun> {
-  return Object.fromEntries(Object.entries(runs).filter(([candidate]) => candidate !== workspaceId));
 }
 
 function nextFrame(): Promise<void> {

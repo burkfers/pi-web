@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isRecord } from "./sessionFileFormat.js";
 import { readSessionHeaderSummary } from "./sessionFileHeader.js";
-import { patchSessionWorktreeOwnershipHeader, recordSessionWorktreeOwnership, rewriteSessionHeader, sessionWorktreeOwnershipFromHeader } from "./sessionWorktreeOwnership.js";
+import { patchSessionDetachmentHeader, patchSessionWorktreeOwnershipHeader, recordSessionDetachment, recordSessionWorktreeOwnership, rewriteSessionHeader, sessionDetachmentFromHeader, sessionWorktreeOwnershipFromHeader } from "./sessionWorktreeOwnership.js";
 
 const CREATED_AT = "2026-03-04T10:00:00.000Z";
 
@@ -127,6 +127,53 @@ describe("session worktree ownership parsing", () => {
     ["header is not an object", "nope"],
   ])("reports no ownership for %s", (_case, header) => {
     expect(sessionWorktreeOwnershipFromHeader(header)).toBeUndefined();
+  });
+});
+
+describe("session detachment record", () => {
+  it("records the branch a parked worktree was released from", async () => {
+    const path = await writeSession("h.jsonl", sessionHeader({ piWeb: { worktree: { owned: true, createdAt: CREATED_AT } } }));
+
+    await recordSessionDetachment(path, { detachedFrom: "feature-x", detachedAt: "afdd9b8" });
+
+    expect(sessionDetachmentFromHeader(await readHeaderObject(path))).toEqual({ detachedFrom: "feature-x", detachedAt: "afdd9b8" });
+    // The ownership record is what makes the worktree PI WEB's to detach at
+    // all, and it has to survive alongside the note.
+    expect(sessionWorktreeOwnershipFromHeader(await readHeaderObject(path))).toEqual({ owned: true, createdAt: CREATED_AT });
+  });
+
+  it("replaces an earlier detachment with the current one", async () => {
+    const path = await writeSession("i.jsonl", sessionHeader({ piWeb: { detachedFrom: "old", detachedAt: "1111111" } }));
+
+    await recordSessionDetachment(path, { detachedFrom: "new", detachedAt: "2222222" });
+
+    expect(sessionDetachmentFromHeader(await readHeaderObject(path))).toEqual({ detachedFrom: "new", detachedAt: "2222222" });
+  });
+
+  it("does not rewrite a detachment it already recorded", async () => {
+    const path = await writeSession("j.jsonl", sessionHeader({ piWeb: { detachedFrom: "feature-x", detachedAt: "afdd9b8" } }));
+    const before = await stat(path);
+
+    await recordSessionDetachment(path, { detachedFrom: "feature-x", detachedAt: "afdd9b8" });
+
+    expect((await stat(path)).mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it.each([
+    ["no record", sessionHeader()],
+    ["no branch", sessionHeader({ piWeb: { detachedAt: "afdd9b8" } })],
+    ["an empty branch", sessionHeader({ piWeb: { detachedFrom: "", detachedAt: "afdd9b8" } })],
+    ["no commit", sessionHeader({ piWeb: { detachedFrom: "feature-x" } })],
+  ])("reads no detachment from a header with %s", (_case, header) => {
+    expect(sessionDetachmentFromHeader(header)).toBeUndefined();
+  });
+
+  it("records a detachment in a live runtime's header", () => {
+    const header: Record<string, unknown> = { type: "session", id: "s1" };
+
+    patchSessionDetachmentHeader(() => header, { detachedFrom: "feature-x", detachedAt: "afdd9b8" });
+
+    expect(sessionDetachmentFromHeader(header)).toEqual({ detachedFrom: "feature-x", detachedAt: "afdd9b8" });
   });
 });
 

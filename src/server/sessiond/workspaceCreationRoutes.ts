@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { TerminalCommandRun, WorkspaceCreationPreview } from "../../shared/apiTypes.js";
+import type { WorkspaceCreationPreview } from "../../shared/apiTypes.js";
 import {
   parseWorkspaceCreationRequest,
   requireWorkspaceCreationPrecondition,
@@ -25,7 +25,7 @@ export interface WorkspaceCreator {
     request: ParsedWorkspaceCreationRequest,
     precondition: string,
     signal: AbortSignal,
-  ): Promise<TerminalCommandRun>;
+  ): Promise<{ path: string }>;
 }
 
 export interface WorkspaceCreationRouteDependencies {
@@ -79,13 +79,18 @@ export function registerWorkspaceCreationRoutes(
       if (prepared === undefined) return reply;
       const { project, parsed, cancellation } = prepared;
 
+      let created: { path: string };
       try {
-        return await dependencies.creations.create(project, parsed, precondition, cancellation.signal);
+        // Creation runs and waits, so answering means the worktree exists — and
+        // the answer names the path it was created at, which the request may not
+        // have specified.
+        created = await dependencies.creations.create(project, parsed, precondition, cancellation.signal);
       } catch (error) {
         return await creationRequestFailed(reply, error);
       } finally {
         cancellation.dispose();
       }
+      return { created: true, path: created.path };
     },
   );
 }

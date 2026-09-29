@@ -35,8 +35,9 @@ function harness(options: HarnessOptions = {}) {
       create: (_project, request, precondition, signal) => {
         signal.throwIfAborted();
         calls.push(`create:${request.name}:${precondition}`);
-        createdPaths = createdPaths.concat(`/mnt/worktrees/roadmap/${request.name}`);
-        return Promise.resolve();
+        const path = `/mnt/worktrees/roadmap/${request.name}`;
+        createdPaths = createdPaths.concat(path);
+        return Promise.resolve({ path });
       },
     },
     sessions: {
@@ -183,6 +184,16 @@ describe("WorktreeSessionService", () => {
     const failure = await service.start(request(), new AbortController().signal).catch((error: unknown) => error);
 
     expect(errorText(failure)).not.toContain("left in place");
+  });
+
+  it("refuses to start a session in a worktree that was not created", async () => {
+    // A command run is asynchronous: "the run was accepted" is not "the
+    // directory exists", and a session's working directory cannot be fixed up
+    // after the fact.
+    const { service, started } = harness({ worktreeExists: false });
+
+    await expect(service.start(request(), new AbortController().signal)).rejects.toThrow(/was not created/);
+    expect(started).toEqual([]);
   });
 
   it("does not start a creation the caller already cancelled", async () => {

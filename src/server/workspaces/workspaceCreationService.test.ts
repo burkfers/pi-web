@@ -6,19 +6,15 @@ import type {
   WorkspaceCreatePlan,
   WorkspaceProvider,
 } from "../../server-plugin-api.js";
-import type { TerminalCommandRun } from "../../shared/apiTypes.js";
 import { parseWorkspaceCreationRequest } from "../../shared/workspaceCreationProtocol.js";
 import type { ServerNoticeCreator } from "../notices/serverNoticeService.js";
 import type { ServerNoticeInput } from "../notices/serverNoticeStore.js";
 import type { ServerPluginProviderContribution } from "../plugins/serverPluginRuntime.js";
 import type { Project } from "../types.js";
-import type { RunTerminalCommandOptions } from "../terminals/requiredTerminalService.js";
+import type { QuietCommandOptions, QuietCommandResult } from "../terminals/quietCommand.js";
+import type { QuietCommandRunner } from "./workspaceCreationService.js";
 import { WorkspaceProviderRegistry } from "./workspaceProviderRegistry.js";
-import {
-  derivedWorktreeDirectory,
-  WorkspaceCreationService,
-  type WorkspaceCreationTerminalHost,
-} from "./workspaceCreationService.js";
+import { derivedWorktreeDirectory, WorkspaceCreationService } from "./workspaceCreationService.js";
 
 const project: Project = {
   id: "project-1",
@@ -46,10 +42,8 @@ describe("WorkspaceCreationService", () => {
       };
     });
     const registry = registryFor(provider);
-    const main = (await registry.resolve(project)).workspaces.find(({ isMain }) => isMain);
-    if (main === undefined) throw new Error("Expected a main workspace");
-    const terminals = terminalHost(calls);
-    const creations = new WorkspaceCreationService(registry, terminals);
+    const runner = commandRunner({ calls });
+    const creations = new WorkspaceCreationService(registry, { runCommand: runner.runCommand });
     const request = parseWorkspaceCreationRequest({ name: "review", baseRef: "origin/main" });
 
     const preview = await creations.preview(project, request);
@@ -67,27 +61,16 @@ describe("WorkspaceCreationService", () => {
       baseRef: "origin/main",
       path: hostPath("/workspace/worktrees/roadmap/review"),
     });
-    expect(terminals.runOptions).toEqual([]);
+    // A preview plans; it does not touch anything.
+    expect(runner.runOptions).toEqual([]);
 
-    const run = await creations.create(project, request, preview.precondition);
+    await expect(creations.create(project, request, preview.precondition)).resolves.toEqual({ path: preview.path });
 
-    expect(run).toMatchObject({ title: "Create worktree: review", terminalId: "terminal-1" });
-    expect(terminals.runOptions).toEqual([{
-      origin: "core",
-      projectId: project.id,
-      workspaceId: main.id,
-      cwd: hostPath("/workspace/roadmap"),
-      title: "Create worktree: review",
-      command: "git worktree add --detach '/workspace/worktrees/roadmap/review' 'origin/main'",
-      metadata: {
-        "pi.operation": "workspace.create",
-        "target.workspacePath": hostPath("/workspace/worktrees/roadmap/review"),
-      },
-      failureNotice: {
-        message: "Workspace creation failed. See terminal output.",
-        context: { targetWorkspacePath: hostPath("/workspace/worktrees/roadmap/review") },
-      },
-    }]);
+    // One command, from the project's own checkout, exactly as planned.
+    expect(runner.runOptions).toHaveLength(1);
+    expect(runner.runOptions[0]?.command).toBe("git worktree add --detach '/workspace/worktrees/roadmap/review' 'origin/main'");
+    expect(runner.runOptions[0]?.cwd).toBe(hostPath("/workspace/roadmap"));
+    expect(runner.runOptions[0]?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("rejects a confirmation whose plan no longer matches the request", async () => {
@@ -99,7 +82,7 @@ describe("WorkspaceCreationService", () => {
       label: "detached@abc1234",
       confirmation: `Create at ${context.request.path} from ${base}?`,
     }));
-    const creations = new WorkspaceCreationService(registryFor(provider), terminalHost());
+    const creations = new WorkspaceCreationService(registryFor(provider), { runCommand: commandRunner().runCommand });
     const request = parseWorkspaceCreationRequest({ name: "review", baseRef: "origin/main" });
     const preview = await creations.preview(project, request);
     base = "origin/release";
@@ -131,7 +114,7 @@ describe("WorkspaceCreationService", () => {
     const provider = creatingProvider([], prepare, [
       providerWorkspace("views", hostPath("/workspace/roadmap-views/roadmap"), false),
     ]);
-    const creations = new WorkspaceCreationService(registryFor(provider), terminalHost());
+    const creations = new WorkspaceCreationService(registryFor(provider), { runCommand: commandRunner().runCommand });
     const request = parseWorkspaceCreationRequest(body);
 
     await expect(creations.preview(project, request)).rejects.toMatchObject({
@@ -144,14 +127,14 @@ describe("WorkspaceCreationService", () => {
   it("rejects the source workspace path, which is an existing workspace like any other", async () => {
     const mainPath = hostPath("/workspace/roadmap-main");
     const provider = creatingProvider([], rejectPlanning, [], mainPath);
-    const creations = new WorkspaceCreationService(registryFor(provider), terminalHost());
+    const creations = new WorkspaceCreationService(registryFor(provider), { runCommand: commandRunner().runCommand });
 
     await expect(creations.preview(project, parseWorkspaceCreationRequest({ name: "review", baseRef: "main", path: mainPath })))
       .rejects.toMatchObject({ statusCode: 400, message: "A new workspace cannot be created inside the existing workspace root" });
   });
 
   it("rejects a path that would contain the registered project", async () => {
-    const creations = new WorkspaceCreationService(registryFor(creatingProvider([], () => { throw new Error("must not plan"); })), terminalHost());
+    const creations = new WorkspaceCreationService(registryFor(creatingProvider([], () => { throw new Error("must not plan"); })), { runCommand: commandRunner().runCommand });
 
     await expect(creations.preview(project, parseWorkspaceCreationRequest({ name: "review", baseRef: "main", path: hostPath("/workspace") })))
       .rejects.toMatchObject({ statusCode: 400, message: "A new workspace cannot be created at a path that contains the registered project" });
@@ -176,7 +159,7 @@ describe("WorkspaceCreationService", () => {
       label: "detached@abc1234",
       confirmation: "Create it?",
     }));
-    const creations = new WorkspaceCreationService(registryFor(provider), terminalHost());
+    const creations = new WorkspaceCreationService(registryFor(provider), { runCommand: commandRunner().runCommand });
 
     await expect(creations.preview(project, parseWorkspaceCreationRequest({ name: "review", baseRef: "main" })))
       .rejects.toMatchObject({
@@ -190,19 +173,38 @@ describe("WorkspaceCreationService", () => {
       probe: () => Promise.resolve("claim"),
       list: () => Promise.resolve([providerWorkspace("root", project.path, true)]),
     });
-    const creations = new WorkspaceCreationService(registry, terminalHost());
+    const creations = new WorkspaceCreationService(registry, { runCommand: commandRunner().runCommand });
 
     await expect(creations.preview(project, parseWorkspaceCreationRequest({ name: "review", baseRef: "main" })))
       .rejects.toMatchObject({ statusCode: 409, message: "Server plugin neutral does not support creating workspaces" });
   });
 
-  it("coalesces identical concurrent creations into one command run", async () => {
+  it("reports a command that failed with what it said, and creates nothing", async () => {
+    const provider = creatingProvider([], (context) => ({
+      title: "Create worktree",
+      command: `git worktree add --detach ${shellQuote(context.request.path)} main`,
+      path: context.request.path,
+      label: "detached@abc1234",
+      confirmation: "Create it?",
+    }));
+    const failing = commandRunner({ result: { exitCode: 128, stdout: "", stderr: "fatal: invalid reference: main", timedOut: false } });
+    const creations = new WorkspaceCreationService(registryFor(provider), { runCommand: failing.runCommand });
+    const request = parseWorkspaceCreationRequest({ name: "review", baseRef: "main" });
+    const preview = await creations.preview(project, request);
+
+    // Nothing is watching a terminal for this, so the reason has to travel back
+    // with the failure or the user has nothing to act on.
+    await expect(creations.create(project, request, preview.precondition)).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Workspace creation failed: fatal: invalid reference: main",
+    });
+  });
+
+  it("coalesces identical concurrent creations into one command", async () => {
     let runs = 0;
-    const terminals: WorkspaceCreationTerminalHost = {
-      runCommand(options) {
-        runs += 1;
-        return commandRun(options);
-      },
+    const runCommand: QuietCommandRunner = () => {
+      runs += 1;
+      return Promise.resolve({ exitCode: 0, stdout: "", stderr: "", timedOut: false } satisfies QuietCommandResult);
     };
     const provider = creatingProvider([], (context) => ({
       title: "Create worktree",
@@ -211,21 +213,21 @@ describe("WorkspaceCreationService", () => {
       label: "detached@abc1234",
       confirmation: "Create it?",
     }));
-    const creations = new WorkspaceCreationService(registryFor(provider), terminals);
+    const creations = new WorkspaceCreationService(registryFor(provider), { runCommand });
     const request = parseWorkspaceCreationRequest({ name: "review", baseRef: "main" });
     const preview = await creations.preview(project, request);
 
-    const [first, second] = await Promise.all([
+    // Two clicks on the same request are one worktree, not a race between two.
+    await Promise.all([
       creations.create(project, request, preview.precondition),
       creations.create(project, request, preview.precondition),
     ]);
 
-    expect(first.id).toBe(second.id);
     expect(runs).toBe(1);
   });
 
-  it("records a notice and rejects when the command run cannot start", async () => {
-    const failure = new Error("terminal unavailable");
+  it("records a notice and rejects when the command cannot start", async () => {
+    const failure = new Error("could not spawn");
     const notices: ServerNoticeInput[] = [];
     const noticeCreator: Pick<ServerNoticeCreator, "record"> = {
       record(notice) {
@@ -242,18 +244,19 @@ describe("WorkspaceCreationService", () => {
     }));
     const creations = new WorkspaceCreationService(registryFor(provider), {
       runCommand: () => { throw failure; },
-    }, { notices: noticeCreator });
+      notices: noticeCreator,
+    });
     const request = parseWorkspaceCreationRequest({ name: "review", baseRef: "main" });
     const preview = await creations.preview(project, request);
 
     await expect(creations.create(project, request, preview.precondition)).rejects.toMatchObject({
       statusCode: 400,
-      message: "Failed to start workspace creation: terminal unavailable",
+      message: "Failed to run workspace creation: could not spawn",
     });
     expect(notices).toEqual([{
       severity: "error",
       source: "workspace.create",
-      message: "Workspace creation failed: Failed to start workspace creation: terminal unavailable",
+      message: "Workspace creation failed: Failed to run workspace creation: could not spawn",
       scope: { projectId: project.id },
       context: { targetWorkspacePath: "" },
     }]);
@@ -261,7 +264,7 @@ describe("WorkspaceCreationService", () => {
 
   it("aborts in-flight planning when the daemon shuts down", async () => {
     const provider = creatingProvider([], () => new Promise<WorkspaceCreatePlan>(() => undefined));
-    const creations = new WorkspaceCreationService(registryFor(provider), terminalHost(), { timeoutMs: 5_000 });
+    const creations = new WorkspaceCreationService(registryFor(provider), { runCommand: commandRunner().runCommand, timeoutMs: 5_000 });
 
     const pending = creations.preview(project, parseWorkspaceCreationRequest({ name: "review", baseRef: "main" }));
     await creations.closeAll("test shutdown");
@@ -332,41 +335,27 @@ function providerWorkspace(
   return { key, path, label: key, isMain, ...extras };
 }
 
-function terminalHost(calls: string[] = []): WorkspaceCreationTerminalHost & { runOptions: RunTerminalCommandOptions[] } {
-  const runOptions: RunTerminalCommandOptions[] = [];
+/**
+ * Stands in for the command runner. Creation is quiet now, so what a test
+ * asserts is the command that was run and whether it was allowed to succeed —
+ * not a terminal run to watch.
+ */
+function commandRunner(options: { calls?: string[]; result?: QuietCommandResult } = {}): {
+  runCommand: (input: QuietCommandOptions) => Promise<QuietCommandResult>;
+  runOptions: QuietCommandOptions[];
+} {
+  const runOptions: QuietCommandOptions[] = [];
   return {
     runOptions,
-    runCommand(options) {
-      calls.push("run");
-      runOptions.push(options);
-      return commandRun(options);
+    runCommand: (input) => {
+      options.calls?.push("run");
+      runOptions.push(input);
+      return Promise.resolve(options.result ?? { exitCode: 0, stdout: "", stderr: "", timedOut: false });
     },
   };
 }
 
-function commandRun(options: RunTerminalCommandOptions): TerminalCommandRun {
-  return {
-    id: "run-1",
-    origin: options.origin,
-    projectId: options.projectId,
-    workspaceId: options.workspaceId,
-    terminalId: "terminal-1",
-    title: options.title,
-    command: options.command,
-    status: "running",
-    createdAt: "2026-07-27T00:00:00.000Z",
-    metadata: requireStringMetadata(options.metadata),
-  };
-}
 
-function requireStringMetadata(value: unknown): Record<string, string> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Expected command metadata");
-  const entries = Object.entries(value);
-  if (!entries.every((entry): entry is [string, string] => typeof entry[1] === "string")) {
-    throw new Error("Expected string command metadata");
-  }
-  return Object.fromEntries(entries);
-}
 
 function rejectPlanning(): never {
   throw new Error("must not plan");

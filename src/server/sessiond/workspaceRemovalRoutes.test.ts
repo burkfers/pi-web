@@ -1,6 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TerminalCommandRun } from "../../shared/apiTypes.js";
 import type { Project } from "../types.js";
 import { WorkspaceRemovalError } from "../workspaces/workspaceRemovalService.js";
 import {
@@ -15,18 +14,6 @@ const project: Project = {
   createdAt: "2026-07-27T00:00:00.000Z",
 };
 
-const run: TerminalCommandRun = {
-  id: "run-1",
-  origin: "core",
-  projectId: project.id,
-  workspaceId: "main",
-  terminalId: "terminal-1",
-  title: "Remove workspace",
-  command: "neutral detach workspace",
-  status: "running",
-  createdAt: "2026-07-27T00:00:00.000Z",
-  metadata: { "pi.operation": "workspace.delete", "target.workspaceId": "linked" },
-};
 
 let app: FastifyInstance;
 
@@ -40,7 +27,7 @@ afterEach(async () => {
 
 describe("session daemon workspace removal routes", () => {
   it("resolves the registered project and returns the host-owned command run", async () => {
-    const remove = vi.fn<WorkspaceRemover["remove"]>(() => Promise.resolve(run));
+    const remove = vi.fn<WorkspaceRemover["remove"]>(() => Promise.resolve());
     const onWorkspacesMutated = vi.fn();
     registerWorkspaceRemovalRoutes(app, { projects: projectReader(), removals: { remove }, onWorkspacesMutated });
 
@@ -51,7 +38,8 @@ describe("session daemon workspace removal routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json<TerminalCommandRun>()).toEqual(run);
+    // The worktree is gone by the time this answers; there is no run to hand back.
+    expect(response.json()).toEqual({ removed: true });
     expect(remove).toHaveBeenCalledTimes(1);
     const call = remove.mock.calls[0];
     expect(call?.slice(0, 3)).toEqual([project, "linked", "v1.confirmed"]);
@@ -86,7 +74,7 @@ describe("session daemon workspace removal routes", () => {
 
   it("rejects an absent confirmation precondition before project or removal work", async () => {
     const requireProject = vi.fn(projectReader().requireProject);
-    const remove = vi.fn(() => Promise.resolve(run));
+    const remove = vi.fn(() => Promise.resolve());
     registerWorkspaceRemovalRoutes(app, { projects: { requireProject }, removals: { remove }, onWorkspacesMutated: vi.fn() });
 
     const response = await app.inject({
