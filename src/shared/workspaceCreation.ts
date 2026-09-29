@@ -1,6 +1,6 @@
 export const workspaceCreateOperation = "workspace.create";
-const workspaceCreateOperationMetadataKey = "pi.operation";
-const targetWorkspacePathMetadataKey = "target.workspacePath";
+export const workspaceCreateOperationMetadataKey = "pi.operation";
+export const targetWorkspacePathMetadataKey = "target.workspacePath";
 
 export interface WorkspaceCreationTarget {
   path: string;

@@ -1,7 +1,7 @@
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { trustApi } from "../api";
-import type { Workspace } from "../api";
+import type { Workspace, WorkspaceCreationPresentation } from "../api";
 import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
 import { writeClipboardText } from "../clipboard";
 import type { WorkspaceLabelItem } from "../plugins/types";
@@ -34,6 +34,11 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
   @property({ attribute: false }) deletingWorkspaceIds: string[] = [];
   @property({ attribute: false }) onSelect?: (workspace: Workspace) => void;
   @property({ attribute: false }) onDelete?: (workspace: Workspace) => void;
+  /** Creation affordance for the listed project; absent means it cannot create workspaces. */
+  @property({ attribute: false }) creation?: WorkspaceCreationPresentation;
+  @property({ attribute: false }) creatingWorkspace = false;
+  /** Reports the control the create panel should anchor itself to. */
+  @property({ attribute: false }) onCreate?: (anchor: HTMLElement) => void;
   @property({ attribute: false }) onToggleCollapsed?: () => void;
   @property({ attribute: false }) onFocusPreviousSection?: () => void | Promise<void>;
   @property({ attribute: false }) onFocusNextSection?: () => void | Promise<void>;
@@ -105,9 +110,29 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
                 </div>
               `;
             })}
+            ${this.renderCreateAction()}
           </div>
         `}
       </section>
+    `;
+  }
+
+  /**
+   * Creating is project-scoped, so it sits below the list rather than on any
+   * one row: the workspace it produces does not exist yet.
+   */
+  private renderCreateAction() {
+    if (this.creation === undefined) return null;
+    return html`
+      <div class="action-row workspace-create-row">
+        <button
+          class="workspace-create"
+          ?disabled=${this.creatingWorkspace}
+          @click=${(event: MouseEvent) => { this.openCreate(event.currentTarget); }}
+        >
+          ${this.creatingWorkspace ? "Creating…" : `+ ${this.creation.actionLabel}`}
+        </button>
+      </div>
     `;
   }
 
@@ -161,6 +186,11 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
         ` : null}
       </div>
     `;
+  }
+
+  private openCreate(trigger: EventTarget | null): void {
+    if (!(trigger instanceof HTMLElement)) return;
+    this.onCreate?.(trigger);
   }
 
   private renderWorkspaceActions(workspace: Workspace): TemplateResult {
@@ -322,6 +352,14 @@ export class WorkspaceList extends LitElement implements KeyboardNavigableSectio
     .workspace-menu-trust input { cursor: pointer; }
     .workspace-trust-link { color: var(--pi-accent); font-size: 12px; text-align: right; white-space: nowrap; }
     .workspace-trust-error { color: var(--pi-danger, #c0392b); line-height: 1.3; }
+    .workspace-create-row { padding: 2px 0; }
+    .workspace-create {
+      width: 100%; text-align: left; font: inherit; cursor: pointer;
+      background: none; border: 1px dashed var(--pi-border, #444); border-radius: 4px;
+      color: inherit; opacity: 0.75; padding: 4px 8px;
+    }
+    .workspace-create:hover:not(:disabled) { opacity: 1; border-style: solid; }
+    .workspace-create:disabled { cursor: default; opacity: 0.5; }
   `];
 }
 

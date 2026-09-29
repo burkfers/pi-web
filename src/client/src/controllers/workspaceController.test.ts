@@ -74,6 +74,13 @@ function harness(
     navigateToWorkspace?: WorkspaceControllerDependencies["navigateToWorkspace"];
     beginNavigationOperation?: WorkspaceControllerDependencies["beginNavigationOperation"];
     loadSessions?: LoadSessions;
+    workspaceResolution?: (projectId: string, machineId?: string, options?: { signal?: AbortSignal }) => Promise<{
+      status: "provider";
+      projectId: string;
+      workspaces: Workspace[];
+      diagnostics: [];
+      creation?: { actionLabel: string; defaultBaseRef?: string };
+    }>;
   } = {},
 ): Harness {
   let state: AppState = { ...initialAppState(), ...initial };
@@ -95,6 +102,14 @@ function harness(
     {
       api: {
         workspaces: loadWorkspaces,
+        // The controller reads the resolution, not the bare list, so it can
+        // keep the project-level creation affordance current.
+        workspaceResolution: options.workspaceResolution ?? vi.fn(async (projectId: string, machineId?: string, request?: { signal?: AbortSignal }) => ({
+          status: "provider" as const,
+          projectId,
+          workspaces: await loadWorkspaces(projectId, machineId, request),
+          diagnostics: [],
+        })),
         sessions: options.loadSessions ?? vi.fn<(path: string, machineId?: string, options?: { signal?: AbortSignal }) => Promise<SessionInfo[]>>().mockResolvedValue([]),
       },
       ...(options.navigateToWorkspace === undefined ? {} : { navigateToWorkspace: options.navigateToWorkspace }),
@@ -251,6 +266,53 @@ describe("WorkspaceController route selection freshness", () => {
 });
 
 describe("WorkspaceController.refreshSelectedProjectTopology", () => {
+  it("keeps the creation affordance from the resolution and drops it when the owner stops advertising one", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const advertised = { status: "provider" as const, projectId: repo.id, workspaces: [main], diagnostics: [], creation: { actionLabel: "New worktree", defaultBaseRef: "origin/main" } };
+    const withdrawn = { status: "provider" as const, projectId: repo.id, workspaces: [main], diagnostics: [] };
+    const resolution = vi.fn()
+      .mockResolvedValueOnce(advertised)
+      .mockResolvedValue(withdrawn);
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        workspacesByProjectId: {},
+        workspaceCreationByProjectId: {},
+      },
+      vi.fn().mockResolvedValue([main]),
+      { workspaceResolution: resolution },
+    );
+
+    await test.controller.selectProject(repo);
+
+    expect(test.controller.creationFor(repo.id)).toEqual({ actionLabel: "New worktree", defaultBaseRef: "origin/main" });
+
+    await test.controller.refreshSelectedProjectTopology();
+
+    // Absent, not stale: a provider that stops advertising creation must stop
+    // the UI offering it.
+    expect(test.controller.creationFor(repo.id)).toBeUndefined();
+  });
+
+  it("forgets a project's creation affordance with the project", () => {
+    const repo = project("p1", "/repo");
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        workspaceCreationByProjectId: { [repo.id]: { actionLabel: "New worktree" } },
+        workspacesByProjectId: { [repo.id]: [] },
+      },
+      vi.fn().mockResolvedValue([]),
+    );
+
+    test.controller.forgetProject(repo.id);
+
+    expect(test.controller.creationFor(repo.id)).toBeUndefined();
+  });
+
   it("surfaces a worktree created outside PI WEB in both the selected list and the per-project cache", async () => {
     const repo = project("p1", "/repo");
     const main = workspace(repo.id, repo.path, { isMain: true });
@@ -270,7 +332,7 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
 
     await test.controller.refreshSelectedProjectTopology();
 
-    expect(loadWorkspaces).toHaveBeenCalledWith(repo.id, "local");
+    expect(loadWorkspaces).toHaveBeenCalledWith(repo.id, "local", undefined);
     expect(test.state().workspaces).toEqual([main, created]);
     expect(test.state().workspacesByProjectId[repo.id]).toEqual([main, created]);
   });

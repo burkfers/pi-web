@@ -1,4 +1,4 @@
-import type { AuthProviderOption, CommandOption, CommandResult, ExtensionDialogAnswer, ExtensionDialogCloseReason, Machine, MachineHealth, MachineRuntime, OAuthFlowState, PendingAskUser, PendingExtensionDialog, PiWebStatusResponse, Project, QueuedSessionMessage, SessionActivity, SessionInfo, SessionModelCatalogEntry, SessionStatus, SessionTreeSnapshot, TerminalCommandRun, Workspace } from "./api";
+import type { AuthProviderOption, CommandOption, CommandResult, ExtensionDialogAnswer, ExtensionDialogCloseReason, Machine, MachineHealth, MachineRuntime, OAuthFlowState, PendingAskUser, PendingExtensionDialog, PiWebStatusResponse, Project, QueuedSessionMessage, SessionActivity, SessionInfo, SessionModelCatalogEntry, SessionStatus, SessionTreeSnapshot, TerminalCommandRun, Workspace, WorkspaceCreationPresentation } from "./api";
 import type { ChatLine } from "./components/shared";
 import type { MachineStatusSnapshot } from "../../shared/machineStatus";
 import type { QualifiedContributionId } from "./plugins/ids";
@@ -64,6 +64,12 @@ export interface AppState {
   /** Authoritative projection plus browser-local optimistic overlays for the selected inbox. */
   selectedNotificationInbox: SelectedSessionNotificationInbox | undefined;
   workspacesByProjectId: Record<string, Workspace[]>;
+  /**
+   * Creation affordance per project id, present only where the workspace owner
+   * provider advertises it. A missing key means the project cannot create
+   * workspaces, which is also what an older session daemon reports.
+   */
+  workspaceCreationByProjectId: Record<string, WorkspaceCreationPresentation>;
   workspaceDeletionRuns: Record<string, TerminalCommandRun>;
   commandDialog: Extract<CommandResult, { type: "select" }> | undefined;
   treeDialog: SessionTreeSnapshot | undefined;
@@ -159,6 +165,7 @@ export function initialAppState(): AppState {
     projectActivityAt: {},
     selectedNotificationInbox: undefined,
     workspacesByProjectId: {},
+    workspaceCreationByProjectId: {},
     workspaceDeletionRuns: {},
     commandDialog: undefined,
     treeDialog: undefined,

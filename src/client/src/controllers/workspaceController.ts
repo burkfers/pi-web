@@ -1,4 +1,4 @@
-import { api as defaultApi, type Project, type Workspace } from "../api";
+import { api as defaultApi, type Project, type Workspace, type WorkspaceCreationPresentation, type WorkspaceProviderResolution } from "../api";
 import { resetWorkspaceScopedState, type AppState } from "../appState";
 import { BrowserErrorReporter, projectBrowserErrorScope, workspaceBrowserErrorScope } from "../browserErrors";
 import { mergeCachedNewSessions } from "../cachedNewSessions";
@@ -12,7 +12,7 @@ const WORKSPACE_TOPOLOGY_REFRESH_DEBOUNCE_MS = 50;
 const WORKSPACE_SELECTION_SCOPE = ["machine", "project", "workspace", "session"] as const;
 
 export interface WorkspaceControllerDependencies {
-  api?: Pick<typeof defaultApi, "sessions" | "workspaces">;
+  api?: Pick<typeof defaultApi, "sessions" | "workspaces" | "workspaceResolution">;
   navigateToWorkspace?: (workspace: Workspace | undefined, options?: NavigationDestinationOptions) => Promise<boolean>;
   captureNavigation?: () => NavigationSelection;
   beginNavigationOperation?: (scope: readonly NavigationScope[]) => NavigationFreshness;
@@ -28,7 +28,7 @@ interface WorkspaceMutationGuard {
 type WorkspaceSelectionTarget = RouteTarget & WorkspaceMutationGuard;
 
 export class WorkspaceController {
-  private readonly api: Pick<typeof defaultApi, "sessions" | "workspaces">;
+  private readonly api: Pick<typeof defaultApi, "sessions" | "workspaces" | "workspaceResolution">;
   private readonly navigateToWorkspace: WorkspaceControllerDependencies["navigateToWorkspace"];
   private readonly captureNavigation: WorkspaceControllerDependencies["captureNavigation"];
   private readonly beginNavigationOperation: WorkspaceControllerDependencies["beginNavigationOperation"];
@@ -66,7 +66,8 @@ export class WorkspaceController {
     this.browserErrors.discard(projectBrowserErrorScope(machineId, projectId));
     this.workspaceSelection.forgetProject(machineProjectKey(machineId, projectId));
     const workspacesByProjectId = Object.fromEntries(Object.entries(this.getState().workspacesByProjectId).filter(([candidate]) => candidate !== projectId));
-    this.setState({ workspacesByProjectId });
+    const workspaceCreationByProjectId = Object.fromEntries(Object.entries(this.getState().workspaceCreationByProjectId).filter(([candidate]) => candidate !== projectId));
+    this.setState({ workspacesByProjectId, workspaceCreationByProjectId });
   }
 
   async selectProject(project: Project, target?: WorkspaceSelectionTarget): Promise<string | undefined> {
@@ -77,11 +78,17 @@ export class WorkspaceController {
     this.sessions.clearActiveSession();
     this.setState({ selectedProject: project, selectedWorkspace: undefined, workspaces: [], isLoadingWorkspaces: true, ...resetWorkspaceScopedState() });
     try {
-      const workspaces = await this.api.workspaces(project.id, machineId);
+      const resolution = await this.api.workspaceResolution(project.id, machineId);
       if (!this.navigationIsCurrent(navigation)
         || selectedMachineId(this.getState()) !== machineId
         || this.getState().selectedProject?.id !== project.id) return;
-      this.setState({ workspaces, workspacesByProjectId: { ...this.getState().workspacesByProjectId, [project.id]: workspaces }, isLoadingWorkspaces: false });
+      const workspaces = [...resolution.workspaces];
+      this.setState({
+        workspaces,
+        workspacesByProjectId: { ...this.getState().workspacesByProjectId, [project.id]: workspaces },
+        ...creationState(this.getState(), project.id, resolution),
+        isLoadingWorkspaces: false,
+      });
       const workspace = selectPreferredWorkspace(workspaces, { targetWorkspaceId: target?.workspaceId, latestWorkspaceId: this.workspaceSelection.latestWorkspaceId(machineProjectKey(machineId, project.id)) });
       if (workspace) {
         return await this.selectWorkspace(workspace, { sessionId: target?.sessionId, updateUrl: target?.updateUrl, navigation });
@@ -145,13 +152,13 @@ export class WorkspaceController {
     if (!workspaceMutationIsCurrent(options)) return [];
     const project = this.getState().projects.find((candidate) => candidate.id === projectId);
     if (project === undefined) throw new Error("Project not found");
-    const workspaces = options?.signal === undefined
-      ? await this.api.workspaces(project.id, machineId)
-      : await this.api.workspaces(project.id, machineId, { signal: options.signal });
+    const resolution = options?.signal === undefined
+      ? await this.api.workspaceResolution(project.id, machineId)
+      : await this.api.workspaceResolution(project.id, machineId, { signal: options.signal });
     if (workspaceMutationIsCurrent(options) && selectedMachineId(this.getState()) === machineId) {
-      this.applyProjectWorkspaces(project.id, workspaces);
+      this.applyProjectWorkspaces(project.id, resolution);
     }
-    return workspaces;
+    return [...resolution.workspaces];
   }
 
   /**
@@ -178,10 +185,10 @@ export class WorkspaceController {
     // just-created worktree disappear again.
     await this.topologyRefreshes.request(machineProjectKey(machineId, project.id), async () => {
       try {
-        const workspaces = await this.api.workspaces(project.id, machineId);
+        const resolution = await this.api.workspaceResolution(project.id, machineId);
         const current = this.getState();
         if (selectedMachineId(current) !== machineId || current.selectedProject?.id !== project.id) return;
-        this.applyProjectWorkspaces(project.id, workspaces);
+        this.applyProjectWorkspaces(project.id, resolution);
       } catch (error) {
         this.onBackgroundError(`Failed to refresh workspaces for project ${project.id} on ${machineId}`, error);
       }
@@ -212,14 +219,21 @@ export class WorkspaceController {
     }
   }
 
-  private applyProjectWorkspaces(projectId: string, workspaces: Workspace[]): void {
+  private applyProjectWorkspaces(projectId: string, resolution: WorkspaceProviderResolution): void {
     const state = this.getState();
+    const workspaces = [...resolution.workspaces];
     const workspacesByProjectId = { ...state.workspacesByProjectId, [projectId]: workspaces };
+    const creation = creationState(state, projectId, resolution);
     if (state.selectedProject?.id !== projectId) {
-      this.setState({ workspacesByProjectId });
+      this.setState({ workspacesByProjectId, ...creation });
       return;
     }
-    this.setState({ workspaces, workspacesByProjectId, ...this.refreshedSelection(state.selectedWorkspace, workspaces) });
+    this.setState({ workspaces, workspacesByProjectId, ...creation, ...this.refreshedSelection(state.selectedWorkspace, workspaces) });
+  }
+
+  /** Creation affordance for one project, absent where its owner cannot create. */
+  creationFor(projectId: string): WorkspaceCreationPresentation | undefined {
+    return this.getState().workspaceCreationByProjectId[projectId];
   }
 
   /**
@@ -249,6 +263,21 @@ function navigationSelection(state: ReturnType<GetState>, captureNavigation?: ()
     workspaceId: state.selectedWorkspace?.id,
     ...(state.selectedSession === undefined || Reflect.get(state.selectedSession, "clientPendingStart") !== true ? { sessionId: state.selectedSession?.id } : {}),
   };
+}
+
+/**
+ * Records the project-level creation affordance, dropping the entry entirely
+ * when the owner no longer advertises one so the UI cannot offer a stale action.
+ */
+function creationState(
+  state: AppState,
+  projectId: string,
+  resolution: WorkspaceProviderResolution,
+): { workspaceCreationByProjectId: AppState["workspaceCreationByProjectId"] } {
+  const current: AppState["workspaceCreationByProjectId"] = { ...state.workspaceCreationByProjectId };
+  Reflect.deleteProperty(current, projectId);
+  if (resolution.creation !== undefined) current[projectId] = resolution.creation;
+  return { workspaceCreationByProjectId: current };
 }
 
 function workspaceMutationIsCurrent(options: WorkspaceMutationGuard | undefined): boolean {

@@ -229,6 +229,57 @@ function unreadDot(row: Element): Element | null {
   return row.querySelector(".activity-indicator.unread");
 }
 
+describe("workspace-list creation action", () => {
+  it("offers the provider's action label only when the project advertises creation", async () => {
+    const withCreation = new WorkspaceList();
+    withCreation.workspaces = [workspace("main")];
+    withCreation.creation = { actionLabel: "New worktree" };
+    document.body.append(withCreation);
+    await withCreation.updateComplete;
+
+    const createButton = withCreation.shadowRoot?.querySelector<HTMLButtonElement>(".workspace-create");
+    expect(createButton?.textContent).toContain("+ New worktree");
+
+    const withoutCreation = new WorkspaceList();
+    withoutCreation.workspaces = [workspace("main")];
+    document.body.append(withoutCreation);
+    await withoutCreation.updateComplete;
+
+    expect(withoutCreation.shadowRoot?.querySelector(".workspace-create")).toBeNull();
+  });
+
+  it("reports the create action without selecting the row under the click", async () => {
+    const onCreate = vi.fn();
+    const onSelect = vi.fn();
+    const list = new WorkspaceList();
+    list.workspaces = [workspace("main")];
+    list.creation = { actionLabel: "New worktree" };
+    list.onCreate = onCreate;
+    list.onSelect = onSelect;
+    document.body.append(list);
+    await list.updateComplete;
+
+    list.shadowRoot?.querySelector<HTMLButtonElement>(".workspace-create")?.click();
+    await list.updateComplete;
+
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("disables the action while a creation is in flight", async () => {
+    const list = new WorkspaceList();
+    list.workspaces = [workspace("main")];
+    list.creation = { actionLabel: "New worktree" };
+    list.creatingWorkspace = true;
+    document.body.append(list);
+    await list.updateComplete;
+
+    const createButton = list.shadowRoot?.querySelector<HTMLButtonElement>(".workspace-create");
+    expect(createButton?.disabled).toBe(true);
+    expect(createButton?.textContent).toContain("Creating…");
+  });
+});
+
 function workspace(id: string, patch: Partial<Workspace> = {}): Workspace {
   return { id, projectId: "project-1", path: `/repo/${id}`, label: id, isMain: true, effectiveConfig: {}, ...patch };
 }

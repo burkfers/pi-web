@@ -1,6 +1,6 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
-import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus, Workspace } from "../../api";
+import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus, Workspace, WorkspaceCreationPresentation } from "../../api";
 import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
 import type { WorkspaceLabelItem } from "../../plugins/types";
 import { selectedMachineId } from "../../controllers/types";
@@ -57,6 +57,9 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) onCloseProject?: (project: Project) => void | Promise<void>;
   @property({ attribute: false }) onSelectWorkspace?: (workspace: Workspace) => void | Promise<void>;
   @property({ attribute: false }) onDeleteWorkspace?: (workspace: Workspace) => void | Promise<void>;
+  @property({ attribute: false }) workspaceCreation?: WorkspaceCreationPresentation;
+  @property({ type: Boolean }) creatingWorkspace = false;
+  @property({ attribute: false }) onCreateWorkspace?: (anchor: HTMLElement) => void | Promise<void>;
   @property({ attribute: false }) onStartSession?: () => void | Promise<void>;
   @property({ attribute: false }) onSelectSession?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onArchiveSession?: (session: SessionInfo) => void | Promise<void>;
@@ -104,6 +107,7 @@ export class AppNavigationPanel extends LitElement {
     toggleWorkspaces: () => { this.onToggleWorkspaces?.(); },
     selectWorkspace: (workspace: Workspace) => this.onSelectWorkspace?.(workspace),
     deleteWorkspace: (workspace: Workspace) => this.onDeleteWorkspace?.(workspace),
+    createWorkspace: (anchor: HTMLElement) => this.onCreateWorkspace?.(anchor),
     toggleSessions: () => { this.onToggleSessions?.(); },
     archivedCollapsed: () => this.onArchivedCollapsed?.(),
     startSession: () => this.onStartSession?.(),
@@ -189,6 +193,9 @@ export class AppNavigationPanel extends LitElement {
         .machineId=${this.selectedMachine?.id ?? "local"}
         .statusSnapshot=${this.selectedMachineStatusSnapshot()}
         .deletingWorkspaceIds=${this.deletingWorkspaceIds}
+        .creation=${this.workspaceCreation}
+        .creatingWorkspace=${this.creatingWorkspace}
+        .onCreate=${this.childCallbacks.createWorkspace}
         .collapsible=${this.collapsible}
         .collapsed=${this.workspacesCollapsed}
         .workspaceLabelItems=${this.workspaceLabelItems}

@@ -5,7 +5,7 @@ import { markdownWorkspaceContext, type WorkspaceFileOpenRequest } from "../form
 import { configApi, effectiveWorkspaceAttachmentsFolder, effectiveWorkspaceUploadFolder, sessionsApi, workspacesApi, workspaceEffectiveAttachmentsFolder, workspaceEffectiveUploadFolder, type AskUserSubmission, type CommandOption, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionModel, type SessionModelCatalogEntry, type SessionModelScopeMode, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type Workspace } from "../api";
 import type { AppAction } from "../actions";
 import { initialAppState, type AppState, type ModelDialogOrigin } from "../appState";
-import { browserErrorContext, browserErrorScopeKey, BrowserErrorReporter, clearBrowserError, machineBrowserErrorScope, visibleBrowserErrors, workspaceBrowserErrorScope, type BrowserError, type BrowserErrorScope } from "../browserErrors";
+import { browserErrorContext, browserErrorScopeKey, BrowserErrorReporter, clearBrowserError, machineBrowserErrorScope, projectBrowserErrorScope, visibleBrowserErrors, workspaceBrowserErrorScope, type BrowserError, type BrowserErrorScope } from "../browserErrors";
 import { isSessionActive } from "../../../shared/activity";
 import { workspaceDeleteOperation } from "../../../shared/workspaceDeletion";
 import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/capabilities";
@@ -58,6 +58,15 @@ import { loadThinkingExpansion, saveThinkingExpansion } from "../chatThinkingExp
 import { resolveVisibleNavigationSection } from "../appShell/navigationState";
 import "./appShell/NavigationDialog";
 import { canDeleteWorkspace, isWorkspaceDeletionPending, isWorkspaceDeletionRunPending, latestWorkspaceDeletionRuns, pendingWorkspaceDeletionIds, targetWorkspaceIdForRun, workspaceDeletionRunFilter, workspaceRemovalConfirmation } from "../workspaceDeletion";
+import {
+  createdWorkspacePathForRun,
+  isWorkspaceCreationRunPending,
+  isWorkspaceCreationRunSucceeded,
+  latestWorkspaceCreationRun,
+  workspaceCreationRunFilter,
+} from "../workspaceCreation";
+import type { WorkspaceCreateSubmission } from "./WorkspaceCreateDialog";
+import "./WorkspaceCreateDialog";
 import "./MachineList";
 import "./ProjectList";
 import "./WorkspaceList";
@@ -102,6 +111,10 @@ const THEME_AUTO_ON_VALUE = "auto:on";
 const THEME_AUTO_OFF_VALUE = "auto:off";
 const THEME_OPTION_PREFIX = "theme:";
 const TERMINAL_PANEL_LOCAL_ID = "workspace.terminal";
+/** How often a creation run is re-read while it runs. */
+const WORKSPACE_CREATION_RUN_POLL_MS = 700;
+/** Upper bound on following one creation run before the UI stops waiting. */
+const WORKSPACE_CREATION_RUN_TIMEOUT_MS = 60_000;
 const MIN_RESIZABLE_CHAT_WIDTH_PX = 320;
 const PANEL_EDGE_COLUMNS_WIDTH_PX = 2;
 const NAVIGATION_SCOPES = ["machine", "project", "workspace", "session", "tool", "view"] as const;
@@ -285,6 +298,9 @@ export class PiWebApp extends LitElement {
   private workspaceDeletionRefreshGeneration = 0;
   private readonly workspaceDeletionReconcileRetries = new Map<string, { attempt: number; retryAt: number }>();
   private readonly handledWorkspaceDeletionRunIds = new Set<string>();
+  @state() private workspaceCreateAnchor: HTMLElement | undefined = undefined;
+  @state() private creatingWorkspace = false;
+  private workspaceCreationGeneration = 0;
   private readonly requiredTerminalByMachine = new Map<string, RequiredTerminalBrowserComposition>();
   private readonly knownRequiredTerminalByMachine = new Map<string, RequiredTerminalBrowserComposition>();
   private readonly verifiedPluginModeByMachine = new Map<string, TerminalPluginMode>();
@@ -1883,6 +1899,9 @@ export class PiWebApp extends LitElement {
         .workspaces=${this.state.workspaces}
         .selectedWorkspace=${this.state.selectedWorkspace}
         .deletingWorkspaceIds=${this.deletingWorkspaceIds}
+        .workspaceCreation=${this.workspaces.creationFor(this.state.selectedProject?.id ?? "")}
+        .creatingWorkspace=${this.creatingWorkspace}
+        .onCreateWorkspace=${(anchor: HTMLElement) => { this.openWorkspaceCreateDialog(anchor); }}
         .sessions=${this.state.sessions}
         .sessionStatuses=${this.state.sessionStatuses}
         .sessionActivities=${this.state.sessionActivities}
@@ -2772,6 +2791,119 @@ export class PiWebApp extends LitElement {
     return createContext();
   }
 
+  private openWorkspaceCreateDialog(anchor: HTMLElement): void {
+    if (this.state.selectedProject === undefined) return;
+    this.workspaceCreateAnchor = anchor;
+  }
+
+  private closeWorkspaceCreateDialog(): void {
+    this.workspaceCreateAnchor = undefined;
+  }
+
+  /**
+   * Runs a confirmed creation, follows the host command run to completion, and
+   * then lands the user in the workspace it produced: selected, with a fresh
+   * session and the composer focused, so the next thing they do is the work
+   * rather than more navigation.
+   */
+  private async createWorkspace(submission: WorkspaceCreateSubmission): Promise<void> {
+    const project = this.state.selectedProject;
+    if (project === undefined || this.creatingWorkspace) return;
+    const machineId = selectedMachineId(this.state);
+    const scope = projectBrowserErrorScope(machineId, project.id);
+    const generation = ++this.workspaceCreationGeneration;
+    const isCurrent = () => generation === this.workspaceCreationGeneration
+      && selectedMachineId(this.state) === machineId
+      && this.state.selectedProject?.id === project.id;
+    this.workspaceCreateAnchor = undefined;
+    this.creatingWorkspace = true;
+
+    try {
+      const composition = this.requiredTerminalComposition(machineId);
+      const run = composition.facade.parseCommandRun(await workspacesApi.createWorkspace(
+        project.id,
+        {
+          name: submission.name,
+          baseRef: submission.baseRef,
+          ...(submission.path === undefined ? {} : { path: submission.path }),
+          precondition: submission.preview.precondition,
+        },
+        machineId,
+      ));
+      const targetPath = createdWorkspacePathForRun(run);
+      if (targetPath === undefined) throw new Error("The creation run did not report the workspace it creates");
+      const sourceWorkspace = await this.workspaceForCommandRun(run, machineId);
+      if (sourceWorkspace !== undefined) {
+        this.workspaceTerminal("core", sourceWorkspace, machineId).open({ terminalId: run.terminalId });
+      }
+
+      const completed = await this.awaitWorkspaceCreationRun(run, machineId, isCurrent);
+      if (!isCurrent() || completed === undefined) return;
+      if (!isWorkspaceCreationRunSucceeded(completed)) {
+        this.browserErrors.report(scope, "Workspace creation failed. See the workspace terminal output.");
+        return;
+      }
+      await this.selectCreatedWorkspace(project.id, targetPath, machineId, isCurrent);
+    } catch (error) {
+      if (isCurrent()) this.browserErrors.report(scope, `Failed to start workspace creation: ${errorMessage(error)}`);
+    } finally {
+      if (generation === this.workspaceCreationGeneration) this.creatingWorkspace = false;
+    }
+  }
+
+  /**
+   * Polls the host's own command run until it settles. The run is the record of
+   * what happened, so the UI never has to guess whether the workspace appeared.
+   */
+  private async awaitWorkspaceCreationRun(
+    run: TerminalCommandRun,
+    machineId: string,
+    isCurrent: () => boolean,
+  ): Promise<TerminalCommandRun | undefined> {
+    const deadline = Date.now() + WORKSPACE_CREATION_RUN_TIMEOUT_MS;
+    let latest = run;
+    while (isWorkspaceCreationRunPending(latest) && Date.now() < deadline && isCurrent()) {
+      await delay(WORKSPACE_CREATION_RUN_POLL_MS);
+      if (!isCurrent()) return undefined;
+      try {
+        const composition = this.requiredTerminalComposition(machineId);
+        const peer = createPluginPeer(composition.binding, { id: run.workspaceId, projectId: run.projectId }, machineId);
+        if (peer === undefined) return latest;
+        const runs = await composition.facade.listCommandRuns({ peer, filter: workspaceCreationRunFilter() });
+        const observed = latestWorkspaceCreationRun(runs, run.id);
+        if (observed !== undefined) latest = observed;
+      } catch (error) {
+        // A failed status read is not a failed creation: keep waiting for the
+        // deadline rather than reporting an error the run may not have had.
+        console.warn("Failed to read workspace creation run status", error);
+      }
+    }
+    return latest;
+  }
+
+  private async selectCreatedWorkspace(
+    projectId: string,
+    path: string,
+    machineId: string,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    let workspaces = this.state.workspacesByProjectId[projectId] ?? [];
+    let created = workspaces.find((workspace) => workspace.path === path);
+    if (created === undefined) {
+      workspaces = await this.workspaces.refreshProjectWorkspaces(projectId, machineId);
+      created = workspaces.find((workspace) => workspace.path === path);
+    }
+    if (!isCurrent() || created === undefined) {
+      if (created === undefined) {
+        this.browserErrors.report(projectBrowserErrorScope(machineId, projectId), `Workspace created at ${path} is not listed yet`);
+      }
+      return;
+    }
+    await this.workspaces.selectWorkspace(created, { updateUrl: true });
+    if (!isCurrent() || this.state.selectedWorkspace?.id !== created.id) return;
+    await this.startSessionAndOpenChat(isCurrent);
+  }
+
   private async deleteWorkspace(workspace = this.state.selectedWorkspace): Promise<void> {
     if (workspace === undefined) return;
     const machineId = selectedMachineId(this.state);
@@ -3641,6 +3773,17 @@ export class PiWebApp extends LitElement {
         ></navigation-dialog>` : null}
         ${state.actionPaletteOpen ? html`<action-palette .actions=${this.getActions()} .onRun=${(action: AppAction) => { this.setState({ actionPaletteOpen: false }); this.runAction(action); }} .onCancel=${() => { this.setState({ actionPaletteOpen: false }); }}></action-palette>` : null}
         ${this.renderSessionTreeNavigator(state)}
+        ${this.workspaceCreateAnchor !== undefined && state.selectedProject !== undefined ? html`<workspace-create-dialog
+          .open=${true}
+          .anchor=${this.workspaceCreateAnchor}
+          .projectId=${state.selectedProject.id}
+          .machineId=${selectedMachineId(state)}
+          .actionLabel=${this.workspaces.creationFor(state.selectedProject.id)?.actionLabel ?? "New worktree"}
+          .defaultBaseRef=${this.workspaces.creationFor(state.selectedProject.id)?.defaultBaseRef}
+          .creating=${this.creatingWorkspace}
+          .onSubmit=${(submission: WorkspaceCreateSubmission) => { void this.createWorkspace(submission); }}
+          .onCancel=${() => { this.closeWorkspaceCreateDialog(); }}
+        ></workspace-create-dialog>` : null}
         ${state.projectDialogOpen ? html`<project-dialog .machineId=${selectedMachineId(state)} .onSubmit=${(path: string, create: boolean, trust: ProjectTrustChoice | undefined) => this.projects.addProject(path, create, trust)} .onCancel=${() => { this.setState({ projectDialogOpen: false }); }}></project-dialog>` : null}
         ${state.machineDialogOpen ? html`<machine-dialog .error=${state.error} .onSubmit=${(input: MachineDialogSubmit) => this.submitMachineDialog(input)} .onCancel=${() => { this.setState({ machineDialogOpen: false }); }}></machine-dialog>` : null}
         ${this.sessionCleanupDialog !== undefined ? html`<session-cleanup-dialog .preview=${this.sessionCleanupDialog.preview} .previewRequest=${this.sessionCleanupDialog.previewRequest} .result=${this.sessionCleanupDialog.result} .loading=${this.sessionCleanupDialog.loading === true} .running=${this.sessionCleanupDialog.running === true} .error=${this.sessionCleanupDialog.error ?? ""} .onPreview=${(request: SessionCleanupRequest) => { void this.previewSessionCleanup(request); }} .onRun=${(request: SessionCleanupRequest) => { void this.runSessionCleanup(request); }} .onClose=${() => { this.closeSessionCleanupDialog(); }}></session-cleanup-dialog>` : null}
@@ -3863,6 +4006,10 @@ function requiredTerminalPluginBinding(registration: PiWebPluginRegistration, ma
     pairedRequestVersion: 1,
     pairedChannelVersion: 1,
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
 function errorMessage(error: unknown): string {
