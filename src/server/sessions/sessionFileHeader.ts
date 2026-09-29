@@ -1,5 +1,7 @@
 import { open, type FileHandle } from "node:fs/promises";
+import type { SessionWorktreeOwnership } from "../../shared/apiTypes.js";
 import { tryParseEntry } from "./sessionFileFormat.js";
+import { sessionWorktreeOwnershipFromHeader } from "./sessionWorktreeOwnership.js";
 
 /** Chunk size for streaming a session file's header region. */
 const HEADER_READ_CHUNK_BYTES = 8192;
@@ -28,6 +30,8 @@ export interface SessionHeaderSummary {
   cwd?: string;
   /** Session file of the parent session, when this session was spawned or forked from one. */
   parentSession?: string;
+  /** Present when PI WEB created the worktree this session runs in. */
+  worktree?: SessionWorktreeOwnership;
 }
 
 /** Reads a session file header; injected so lookups can replace or observe their header reads. */
@@ -108,10 +112,12 @@ function classifyHeaderLine(lineBytes: Buffer): SessionHeaderSummary | undefined
   if (typeof id !== "string" || id === "") return undefined;
   const cwd = nonEmptyStringField(entry, "cwd");
   const parentSession = nonEmptyStringField(entry, "parentSession");
+  const worktree = sessionWorktreeOwnershipFromHeader(entry);
   return {
     id,
     ...(cwd === undefined ? {} : { cwd }),
     ...(parentSession === undefined ? {} : { parentSession }),
+    ...(worktree === undefined ? {} : { worktree }),
   };
 }
 

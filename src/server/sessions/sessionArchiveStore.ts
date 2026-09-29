@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { access, copyFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { piWebDataDir } from "../../config.js";
+import type { SessionWorktreeOwnership } from "../../shared/apiTypes.js";
 import { canonicalizeStoredCwd } from "../workingDirectory.js";
 
 export interface ArchiveSessionInput {
@@ -15,6 +16,7 @@ export interface ArchiveSessionInput {
   firstMessage: string;
   name?: string;
   parentSessionPath?: string;
+  worktree?: SessionWorktreeOwnership;
 }
 
 export interface ArchivedSessionRecord {
@@ -29,6 +31,8 @@ export interface ArchivedSessionRecord {
   firstMessage?: string;
   name?: string;
   parentSessionPath?: string;
+  /** Kept on the archived record so a parked session can still be cleaned up. */
+  worktree?: SessionWorktreeOwnership;
 }
 
 export interface SessionArchiveFile {
@@ -189,6 +193,7 @@ function archiveRecordFromInput(session: ArchiveSessionInput, archive: { archive
     firstMessage: session.firstMessage,
     ...(session.name === undefined ? {} : { name: session.name }),
     ...(session.parentSessionPath === undefined ? {} : { parentSessionPath: session.parentSessionPath }),
+    ...(session.worktree === undefined ? {} : { worktree: session.worktree }),
   };
 }
 
@@ -251,6 +256,7 @@ function parseArchivedSessionRecord(value: unknown): ArchivedSessionRecord {
   const firstMessage = optionalString(value, "firstMessage");
   const name = optionalString(value, "name");
   const parentSessionPath = optionalString(value, "parentSessionPath");
+  const worktree = parseArchivedWorktreeOwnership(value["worktree"]);
   return {
     sessionId,
     cwd: canonicalCwd,
@@ -263,7 +269,15 @@ function parseArchivedSessionRecord(value: unknown): ArchivedSessionRecord {
     ...(firstMessage === undefined ? {} : { firstMessage }),
     ...(name === undefined ? {} : { name }),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
+    ...(worktree === undefined ? {} : { worktree }),
   };
+}
+
+function parseArchivedWorktreeOwnership(value: unknown): SessionWorktreeOwnership | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value["owned"] !== true) return undefined;
+  const createdAt = value["createdAt"];
+  return typeof createdAt === "string" && createdAt !== "" ? { owned: true, createdAt } : undefined;
 }
 
 function optionalString(record: Record<string, unknown>, key: string): string | undefined {

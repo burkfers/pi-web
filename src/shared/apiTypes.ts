@@ -637,6 +637,20 @@ export interface SessionNotificationSummaryEvent {
   summary: SessionNotificationSummary;
 }
 
+/**
+ * A worktree PI WEB created for this session. Recorded in the session file
+ * header, so it travels with the session and survives restarts; the worktree
+ * itself is the session's `cwd`.
+ *
+ * Absent means PI WEB did not create the session's worktree, and the session
+ * must never be cleaned up or detached automatically.
+ */
+export interface SessionWorktreeOwnership {
+  owned: true;
+  /** When the worktree was created. */
+  createdAt: string;
+}
+
 export interface SessionInfo extends SessionRef {
   path: string;
   /** True when the server has verified a backing session file exists; false when known transient. */
@@ -647,6 +661,8 @@ export interface SessionInfo extends SessionRef {
   messageCount: number;
   firstMessage: string;
   parentSessionPath?: string;
+  /** Present only for a session whose worktree PI WEB created. */
+  worktree?: SessionWorktreeOwnership;
   archived?: boolean;
   archivedAt?: string;
 }

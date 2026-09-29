@@ -1,6 +1,5 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
@@ -81,6 +80,8 @@ import type { SessionRouteRef, SessionRouteService } from "./sessionService.js";
 
 import { type AuthChange } from "./authService.js";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
+import type { SessionWorktreeOwnership } from "../../shared/apiTypes.js";
+import { patchSessionWorktreeOwnershipHeader, recordSessionWorktreeOwnership, rewriteSessionHeader, sessionWorktreeOwnershipFromHeader } from "./sessionWorktreeOwnership.js";
 import { readSessionHeaderSummary } from "./sessionFileHeader.js";
 import type { WorkspaceActivityService } from "../activity/workspaceActivityService.js";
 import { createAskUserToolDefinition, type AskUserInvocation, type AskUserToolDeps } from "./askUserTool.js";
@@ -318,6 +319,8 @@ export interface PiSessionListEntry {
   id: string;
   path: string;
   cwd: string;
+  /** Present when PI WEB created the worktree this session runs in. */
+  worktree?: SessionWorktreeOwnership;
   created: Date;
   modified: Date;
   /**
@@ -3240,6 +3243,27 @@ export class PiSessionService implements SessionRouteService {
     this.publishStatus(reopenedSession);
   }
 
+  /**
+   * Record that PI WEB created this session's worktree.
+   *
+   * A session that has never persisted has no file to rewrite, and the SDK
+   * writes its in-memory header verbatim when it first does, so the memory
+   * patch is the only correct thing to do there. Once a file exists the SDK
+   * appends, so the header must be rewritten in place as well; both halves are
+   * always applied so the file and the runtime never disagree.
+   */
+  async recordWorktreeOwnership(ref: PiSessionRef, ownership: { readonly createdAt: string }): Promise<void> {
+    const session = await this.getOrOpen(ref);
+    const sessionFile = session.sessionFile;
+    if (sessionFile !== undefined && sessionFile !== "" && sessionFileExists(sessionFile)) {
+      await recordSessionWorktreeOwnership(sessionFile, { owned: true, createdAt: ownership.createdAt });
+      // Same reason as detachParent: an in-place rewrite that does not change
+      // the file size is invisible to the listing's identity-and-size memo.
+      this.sessionManager.invalidateSessionFile(sessionFile);
+    }
+    patchSessionWorktreeOwnershipHeader(session.sessionManager.getHeader?.bind(session.sessionManager), { owned: true, createdAt: ownership.createdAt });
+  }
+
   async detachParent(ref: PiSessionRef): Promise<void> {
     const session = await this.getOrOpen(ref);
     const sessionFile = session.sessionFile;
@@ -4680,6 +4704,7 @@ function clientSessionFromListEntry(session: PiSessionListEntry): ClientSession 
     messageCount: session.messageCount,
     firstMessage: clientSessionFirstMessagePreview(session.firstMessage),
     ...(session.parentSessionPath === undefined ? {} : { parentSessionPath: session.parentSessionPath }),
+    ...(session.worktree === undefined ? {} : { worktree: session.worktree }),
   };
 }
 
@@ -4694,13 +4719,16 @@ function archiveInputFromListEntry(session: PiSessionListEntry): ArchiveSessionI
     firstMessage: session.firstMessage,
     ...(session.name === undefined ? {} : { name: session.name }),
     ...(session.parentSessionPath === undefined ? {} : { parentSessionPath: session.parentSessionPath }),
+    ...(session.worktree === undefined ? {} : { worktree: session.worktree }),
   };
 }
 
 function archiveInputFromActiveSession(session: PiAgentSession): ArchiveSessionInput {
   const sessionFile = session.sessionFile;
   if (sessionFile === undefined || sessionFile === "") throw new Error("Session is not persisted");
-  const parentSessionPath = session.sessionManager.getHeader?.()?.parentSession;
+  const header = session.sessionManager.getHeader?.();
+  const parentSessionPath = header?.parentSession;
+  const worktree = sessionWorktreeOwnershipFromHeader(header);
   return {
     sessionId: session.sessionId,
     cwd: session.sessionManager.getCwd(),
@@ -4711,6 +4739,7 @@ function archiveInputFromActiveSession(session: PiAgentSession): ArchiveSessionI
     firstMessage: "",
     ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
+    ...(worktree === undefined ? {} : { worktree }),
   };
 }
 
@@ -4729,6 +4758,7 @@ function archiveCandidateFromArchivedRecord(record: ArchivedSessionRecord, fallb
   const path = record.originalPath ?? fallback?.path;
   if (path === undefined) return undefined;
   const parentSessionPath = record.parentSessionPath ?? fallback?.parentSessionPath;
+  const worktree = record.worktree ?? fallback?.worktree;
   return {
     id: record.sessionId,
     path,
@@ -4736,6 +4766,7 @@ function archiveCandidateFromArchivedRecord(record: ArchivedSessionRecord, fallb
     archived: true,
     ...(fallback === undefined ? {} : { listEntry: fallback }),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
+    ...(worktree === undefined ? {} : { worktree }),
   };
 }
 
@@ -4776,6 +4807,7 @@ function clientSessionFromArchivedRecord(record: ArchivedSessionRecord, fallback
   if (path === undefined || created === undefined || modified === undefined || messageCount === undefined || firstMessage === undefined) return undefined;
   const name = record.name ?? fallback?.name;
   const parentSessionPath = record.parentSessionPath ?? fallback?.parentSessionPath;
+  const worktree = record.worktree ?? fallback?.worktree;
   return {
     id: record.sessionId,
     path,
@@ -4786,6 +4818,7 @@ function clientSessionFromArchivedRecord(record: ArchivedSessionRecord, fallback
     messageCount,
     firstMessage: clientSessionFirstMessagePreview(firstMessage),
     ...(parentSessionPath === undefined ? {} : { parentSessionPath }),
+    ...(worktree === undefined ? {} : { worktree }),
     archived: true,
     archivedAt: record.archivedAt,
   };
@@ -4986,15 +5019,11 @@ async function sessionFileHeaderMatches(sessionFile: string, expected: { session
 }
 
 async function clearParentSession(sessionFile: string): Promise<void> {
-  const content = await readFile(sessionFile, "utf8");
-  const newlineIndex = content.indexOf("\n");
-  const firstLine = newlineIndex === -1 ? content : content.slice(0, newlineIndex);
-  const rest = newlineIndex === -1 ? "" : content.slice(newlineIndex);
-  const header: unknown = JSON.parse(firstLine);
-  if (!isRecord(header) || header["type"] !== "session") throw new Error("Invalid session file header");
-  if (header["parentSession"] === undefined) return;
-  delete header["parentSession"];
-  await writeFile(sessionFile, `${JSON.stringify(header)}${rest}`, "utf8");
+  await rewriteSessionHeader(sessionFile, (header) => {
+    if (header["parentSession"] === undefined) return false;
+    delete header["parentSession"];
+    return true;
+  });
 }
 
 function clearParentSessionHeader(sessionManager: PiSessionManager): void {
