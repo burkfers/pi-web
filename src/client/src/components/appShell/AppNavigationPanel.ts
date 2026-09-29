@@ -68,6 +68,8 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) onArchiveSessionWithDescendants?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onArchiveSessions?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onRestoreSession?: (session: SessionInfo) => void | Promise<void>;
+  /** Remove a parked session's worktree, keeping the session. */
+  @property({ attribute: false }) onRemoveSessionWorktree?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onDeleteCachedNewSession?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onDeleteArchivedSession?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onDeleteArchivedSessions?: (sessions: SessionInfo[]) => void | Promise<void>;
@@ -119,6 +121,7 @@ export class AppNavigationPanel extends LitElement {
     archiveSessionWithDescendants: (session: SessionInfo) => this.onArchiveSessionWithDescendants?.(session),
     archiveSessions: (sessions: SessionInfo[]) => this.onArchiveSessions?.(sessions),
     restoreSession: (session: SessionInfo) => this.onRestoreSession?.(session),
+    removeSessionWorktree: (session: SessionInfo) => this.onRemoveSessionWorktree?.(session),
     deleteCachedNewSession: (session: SessionInfo) => this.onDeleteCachedNewSession?.(session),
     deleteArchivedSession: (session: SessionInfo) => this.onDeleteArchivedSession?.(session),
     deleteArchivedSessions: (sessions: SessionInfo[]) => this.onDeleteArchivedSessions?.(sessions),
@@ -214,6 +217,7 @@ export class AppNavigationPanel extends LitElement {
       ${isNavigationSectionHidden("sessions", this.hiddenSections) ? null : html`
       <session-list
         .sessions=${this.sessions}
+        .workspaces=${this.workspaces}
         .statuses=${this.sessionStatuses}
         .activities=${this.sessionActivities}
         .sending=${this.sendingPrompts}
@@ -231,6 +235,7 @@ export class AppNavigationPanel extends LitElement {
         .onArchiveWithDescendants=${this.childCallbacks.archiveSessionWithDescendants}
         .onArchiveMany=${this.childCallbacks.archiveSessions}
         .onRestore=${this.childCallbacks.restoreSession}
+        .onRemoveWorktree=${this.childCallbacks.removeSessionWorktree}
         .onDelete=${this.childCallbacks.deleteCachedNewSession}
         .onDeleteArchived=${this.childCallbacks.deleteArchivedSession}
         .onDeleteArchivedMany=${this.childCallbacks.deleteArchivedSessions}

@@ -1,7 +1,8 @@
 import { LitElement, css, html, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { SessionActivity, SessionInfo, SessionStatus } from "../api";
+import type { SessionActivity, SessionInfo, SessionStatus, Workspace } from "../api";
+import { sessionWorktreeState, sessionWorktreeStateLabel, sessionWorktreeStateTitle } from "../sessionWorktreeState";
 import { isCachedNewSessionInfo } from "../cachedNewSessions";
 import { shortSessionId } from "../sessionLabels";
 import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../sessionPersistence";
@@ -42,6 +43,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) sending: Record<string, true> = {};
   @property({ attribute: false }) unreadSessionIds: ReadonlySet<string> = new Set();
   @property({ attribute: false }) selected?: SessionInfo;
+  /** The project's current workspaces, for each row's worktree state. */
+  @property({ attribute: false }) workspaces: readonly Workspace[] = [];
   @property({ type: Number }) startingCount = 0;
   @property({ type: Boolean }) canStart = false;
   @property({ type: Boolean, reflect: true }) collapsible = false;
@@ -57,6 +60,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) onArchiveWithDescendants?: (session: SessionInfo) => void;
   @property({ attribute: false }) onArchiveMany?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onRestore?: (session: SessionInfo) => void;
+  /** Remove a parked session's worktree, keeping the session. */
+  @property({ attribute: false }) onRemoveWorktree?: (session: SessionInfo) => void;
   @property({ attribute: false }) onDelete?: (session: SessionInfo) => void;
   @property({ attribute: false }) onDeleteArchived?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onDeleteArchivedMany?: (sessions: SessionInfo[]) => void | Promise<void>;
@@ -333,7 +338,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
       >
         <div class="action-main ${selectionActive ? "selecting" : ""}">
           ${showsCheckbox ? html`<input class="session-checkbox" type="checkbox" aria-label=${`Select ${sessionLabel(session)}`} .checked=${bulkSelected} @click=${(event: MouseEvent) => { event.stopPropagation(); }} @change=${() => { this.toggleSelected(session.id); }}>` : null}
-          <span class="action-name-line"><span class="action-name" dir="auto">${this.renderRowMarker(row)}${sessionLabel(session)}</span>${this.renderRowBadges(row)}</span><small>${this.renderSessionMetaPrefix(session, status, activity)}${String(session.messageCount)} messages</small>
+          <span class="action-name-line"><span class="action-name" dir="auto">${this.renderRowMarker(row)}${sessionLabel(session)}</span>${this.renderRowWorktreeState(session)}${this.renderRowBadges(row)}</span><small>${this.renderSessionMetaPrefix(session, status, activity)}${String(session.messageCount)} messages</small>
           ${this.renderActivity(indicatorKind, unread)}
         </div>
         <div class="action-menu">
@@ -343,6 +348,9 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
               ${this.renamingSessionId === session.id ? this.renderRenameForm(session) : session.archived === true
                 ? html`
                   <button title="Restore session" @click=${() => { this.openMenuSessionId = undefined; this.onRestore?.(session); }}>Restore</button>
+                  ${this.canRemoveWorktree(session)
+                    ? html`<button title=${`Remove the worktree this session used (${session.cwd}). The session itself is kept.`} @click=${() => { this.openMenuSessionId = undefined; this.onRemoveWorktree?.(session); }}>Remove worktree</button>`
+                    : null}
                   <button class="danger" title="Permanently delete archived session" @click=${() => { this.openMenuSessionId = undefined; this.confirmDeleteArchived(session); }}>Delete archived session</button>
                 `
                 : canDeleteTransient
@@ -375,6 +383,29 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
       return html`<span class="tree-marker orphan-marker" title=${ORPHAN_PARENT_TITLE} aria-label=${ORPHAN_PARENT_LABEL}>↳</span>`;
     }
     return row.depth > 0 ? html`<span class="tree-marker">↳</span>` : null;
+  }
+
+  /**
+   * The session's worktree state, beside its name: the branch it is on, the
+   * commit it is detached at, or that it has no worktree of its own. A session
+   * row is where a user looks to answer what a session is doing to the
+   * repository, so the answer belongs here rather than in a worktree list they
+   * would have to correlate by hand.
+   */
+  /**
+   * A parked session's worktree is still on disk, and removing it is a
+   * separate decision from keeping the session: the transcript is what the
+   * user archived, the directory is what they are cleaning up.
+   */
+  private canRemoveWorktree(session: SessionInfo): boolean {
+    if (session.worktree === undefined) return false;
+    return this.workspaces.some((workspace) => workspace.path === session.cwd && workspace.removal !== undefined);
+  }
+
+  private renderRowWorktreeState(session: SessionInfo) {
+    const state = sessionWorktreeState(session, this.workspaces);
+    if (state === undefined) return null;
+    return html`<span class="row-worktree-state ${state.kind}" title=${sessionWorktreeStateTitle(state, session.cwd)}>${sessionWorktreeStateLabel(state)}</span>`;
   }
 
   /**
@@ -600,6 +631,9 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .pending-session-row.starting-session .action-main { border-radius: 8px; border-style: dashed; color: var(--pi-muted); }
     .pending-session-row.starting-session .action-name { display: flex; align-items: center; gap: 6px; max-height: none; -webkit-line-clamp: 1; }
     .pending-session-row.starting-session .activity-indicator { flex: 0 0 auto; margin: 0; }
+    .row-worktree-state { flex: 0 0 auto; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; border: 1px solid var(--pi-border); border-radius: 999px; color: var(--pi-muted); font-size: 10px; line-height: 15px; }
+    .row-worktree-state.shared, .row-worktree-state.removed { border-style: dashed; }
+    .row-worktree-state.removed { color: var(--pi-danger, #c66); }
     .rename-form { display: grid; gap: 6px; padding: 8px; }
     .rename-input { box-sizing: border-box; width: 100%; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-bg); color: var(--pi-text); padding: 8px 9px; font: inherit; }
     .rename-error { color: var(--pi-danger); white-space: normal; }

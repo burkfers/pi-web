@@ -5,7 +5,7 @@ import { markdownWorkspaceContext, type WorkspaceFileOpenRequest } from "../form
 import { configApi, effectiveWorkspaceAttachmentsFolder, effectiveWorkspaceUploadFolder, sessionsApi, workspacesApi, workspaceEffectiveAttachmentsFolder, workspaceEffectiveUploadFolder, type AskUserSubmission, type CommandOption, type ExtensionDialogAnswer, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type SessionModel, type SessionModelCatalogEntry, type SessionModelScopeMode, type SessionTreeForkResult, type SessionTreeNavigateResult, type SessionTreeSummaryChoice, type TerminalCommandRun, type Workspace } from "../api";
 import type { AppAction } from "../actions";
 import { initialAppState, type AppState, type ModelDialogOrigin } from "../appState";
-import { browserErrorContext, browserErrorScopeKey, BrowserErrorReporter, clearBrowserError, machineBrowserErrorScope, projectBrowserErrorScope, visibleBrowserErrors, workspaceBrowserErrorScope, type BrowserError, type BrowserErrorScope } from "../browserErrors";
+import { browserErrorContext, browserErrorScopeKey, BrowserErrorReporter, clearBrowserError, machineBrowserErrorScope, projectBrowserErrorScope, sessionBrowserErrorScope, visibleBrowserErrors, workspaceBrowserErrorScope, type BrowserError, type BrowserErrorScope } from "../browserErrors";
 import { isSessionActive } from "../../../shared/activity";
 import { workspaceDeleteOperation } from "../../../shared/workspaceDeletion";
 import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/capabilities";
@@ -1878,6 +1878,7 @@ export class PiWebApp extends LitElement {
         .creatingWorkspace=${this.creatingWorkspace}
         .onCreateWorkspace=${(anchor: HTMLElement) => { this.openWorkspaceCreateDialog(anchor); }}
         .onStartSharedSession=${(workspace: Workspace) => { void this.startSharedSessionFor(workspace); }}
+        .onRemoveSessionWorktree=${(session: SessionInfo) => { void this.removeSessionWorktree(session); }}
         .sessions=${this.state.sessions}
         .sessionStatuses=${this.state.sessionStatuses}
         .sessionActivities=${this.state.sessionActivities}
@@ -2933,6 +2934,23 @@ export class PiWebApp extends LitElement {
     // The user chose this worktree in the dialog, so the session belongs to the
     // worktree they asked for rather than to a new one of its own.
     await this.startSessionAndOpenChat(isCurrent, { shared: true });
+  }
+
+  /**
+   * Clean up a parked session's worktree without touching the session.
+   *
+   * The transcript is what the user archived; the directory is a separate
+   * thing they may want gone weeks later, while keeping the conversation. It
+   * is the ordinary workspace removal — same confirmation, same visible run,
+   * same safety warnings — aimed at the workspace the session used to run in.
+   */
+  private async removeSessionWorktree(session: SessionInfo): Promise<void> {
+    const workspace = this.state.workspaces.find((candidate) => candidate.path === session.cwd);
+    if (workspace === undefined) {
+      this.browserErrors.report(sessionBrowserErrorScope(selectedMachineId(this.state), session.id), `The worktree for this session is no longer listed`);
+      return;
+    }
+    await this.deleteWorkspace(workspace);
   }
 
   private async deleteWorkspace(workspace = this.state.selectedWorkspace): Promise<void> {
