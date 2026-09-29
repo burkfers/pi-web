@@ -15,7 +15,7 @@ import type { Project } from "../types.js";
 import type { RunTerminalCommandOptions } from "../terminals/requiredTerminalService.js";
 import { WorkspaceProviderRegistry } from "./workspaceProviderRegistry.js";
 import {
-  defaultWorkspaceCreationPath,
+  derivedWorktreeDirectory,
   WorkspaceCreationService,
   type WorkspaceCreationTerminalHost,
 } from "./workspaceCreationService.js";
@@ -270,13 +270,13 @@ describe("WorkspaceCreationService", () => {
   });
 });
 
-describe("defaultWorkspaceCreationPath", () => {
+describe("derivedWorktreeDirectory", () => {
   it("places worktrees in a worktrees tree beside the project checkout", () => {
-    expect(defaultWorkspaceCreationPath("/workspace/roadmap", "review")).toBe("/workspace/worktrees/roadmap/review");
+    expect(derivedWorktreeDirectory("/workspace/roadmap")).toBe("/workspace/worktrees/roadmap");
   });
 
   it("keeps a project checked out at the filesystem root from escaping it", () => {
-    expect(defaultWorkspaceCreationPath("/", "review")).toBe("/worktrees/review");
+    expect(derivedWorktreeDirectory("/")).toBe("/worktrees");
   });
 });
 

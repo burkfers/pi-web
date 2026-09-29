@@ -276,6 +276,7 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
     ...(value["pathAccess"] !== undefined ? { pathAccess: parsePathAccessConfig(value["pathAccess"], path) } : {}),
     ...(value["uploads"] !== undefined ? { uploads: parseUploadsConfig(value["uploads"], path) } : {}),
     ...(value["attachments"] !== undefined ? { attachments: parseAttachmentsConfig(value["attachments"], path) } : {}),
+    ...(value["worktrees"] !== undefined ? { worktrees: parseWorktreesConfig(value["worktrees"], path) } : {}),
     ...(value["maxUploadBytes"] !== undefined ? { maxUploadBytes: parseMaxUploadBytes(value["maxUploadBytes"], "maxUploadBytes", path) } : {}),
     ...(value["spawnSessions"] !== undefined ? { spawnSessions: parseSpawnSessions(value["spawnSessions"], path) } : {}),
     ...(value["subsessions"] !== undefined ? { subsessions: parseSubsessions(value["subsessions"], path) } : {}),
@@ -498,6 +499,32 @@ export function parseAttachmentsConfig(value: unknown, path: string): NonNullabl
   return {
     ...(defaultFolder !== undefined ? { defaultFolder: parseWorkspaceRelativeFolder(defaultFolder, "attachments.defaultFolder", path) } : {}),
   };
+}
+
+export function parseWorktreesConfig(value: unknown, path: string): NonNullable<PiWebConfigValues["worktrees"]> {
+  if (!isRecord(value)) throw new Error(`PI WEB config worktrees must be an object: ${path}`);
+  const root = value["root"];
+  const newSession = value["newSession"];
+  if (newSession !== undefined && newSession !== "always" && newSession !== "never") {
+    throw new Error(`PI WEB config worktrees.newSession must be "always" or "never": ${path}`);
+  }
+  return {
+    ...(root === undefined ? {} : { root: parseWorktreeRoot(root, "worktrees.root", path) }),
+    ...(newSession === undefined ? {} : { newSession }),
+  };
+}
+
+/**
+ * The worktree root is a host path, not a workspace-relative one, so it is
+ * required to be absolute (or `~/`-prefixed) and normalized once here; every
+ * later comparison works on the expanded form.
+ */
+function parseWorktreeRoot(value: unknown, key: string, path: string): string {
+  if (typeof value !== "string" || value.trim() === "") throw new Error(`PI WEB config ${key} must be a non-empty path: ${path}`);
+  const trimmed = value.trim();
+  const expanded = trimmed === "~" ? homedir() : trimmed.startsWith("~/") ? join(homedir(), trimmed.slice(2)) : trimmed;
+  if (!isAbsolute(expanded)) throw new Error(`PI WEB config ${key} must be an absolute path: ${path}`);
+  return resolve(expanded);
 }
 
 function parseWorkspaceRelativeFolder(value: unknown, key: string, path: string): string {

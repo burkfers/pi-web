@@ -42,6 +42,7 @@ import { getPiWebRuntimeComponent } from "./piWebStatus.js";
 import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
 import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, piWebDataDir, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
 import { createFilePiWebConfigService } from "./configRoutes.js";
+import { resolveProjectWorktreeDirectory } from "./workspaces/worktreeRoot.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
 import { DefaultPiPackageProvider, PiWebPluginCatalog } from "./piWebPluginCatalog.js";
@@ -373,7 +374,10 @@ async function createSessionDaemonRuntime() {
       removeTerminal: (terminalId, cwd) => { workspaceActivity.removeTerminal(terminalId, cwd); },
     });
     const workspaceRemovals = new WorkspaceRemovalService(workspaceProviders, terminals, { notices: serverNotices });
-    const workspaceCreations = new WorkspaceCreationService(workspaceProviders, terminals, { notices: serverNotices });
+    const workspaceCreations = new WorkspaceCreationService(workspaceProviders, terminals, {
+      notices: serverNotices,
+      worktreeDirectory: (projectPath) => resolveProjectWorktreeDirectory(projectPath, config),
+    });
     const runtimeComponent = Object.freeze({
       // The deprecated-input report is fixed at startup: it was detected from
       // the captured pre-scrub daemon environment and the config snapshot this

@@ -14,6 +14,7 @@ import {
   WorkspaceProviderCreationError,
   type WorkspaceProviderCreationTarget,
 } from "./workspaceProviderRegistry.js";
+import { WorktreeRootError } from "./worktreeRoot.js";
 
 export interface WorkspaceCreationProvider {
   resolveCreation(
@@ -31,6 +32,12 @@ export interface WorkspaceCreationServiceOptions {
   timeoutMs?: number;
   /** Records creation failures before the request reports them. */
   notices?: Pick<ServerNoticeCreator, "record">;
+  /**
+   * Where a request that named no path of its own puts its worktree. Injected
+   * so the configured root and the derived fallback are the caller's decision,
+   * and so the service never reads configuration itself.
+   */
+  worktreeDirectory?: (projectPath: string) => string | Promise<string>;
 }
 
 interface WorkspaceCreationFlight {
@@ -62,6 +69,7 @@ interface PlannedCreation {
 export class WorkspaceCreationService {
   private readonly timeoutMs: number;
   private readonly notices: Pick<ServerNoticeCreator, "record"> | undefined;
+  private readonly worktreeDirectory: (projectPath: string) => string | Promise<string>;
   private readonly flights = new Map<string, WorkspaceCreationFlight>();
   private readonly shutdown = new AbortController();
   private closePromise: Promise<void> | undefined;
@@ -73,6 +81,21 @@ export class WorkspaceCreationService {
   ) {
     this.timeoutMs = options.timeoutMs ?? WORKSPACE_CREATION_OPERATION_TIMEOUT_MS;
     this.notices = options.notices;
+    this.worktreeDirectory = options.worktreeDirectory ?? ((projectPath) => derivedWorktreeDirectory(projectPath));
+  }
+
+  /**
+   * A worktree root the user configured but the host cannot use — inside the
+   * checkout, or the filesystem root — is a configuration problem the user has
+   * to fix, so it is reported as such rather than as a server failure.
+   */
+  private async providerRequestFor(project: Project, request: ParsedWorkspaceCreationRequest): Promise<ProviderCreateRequest> {
+    try {
+      return await buildProviderRequest(project, request, this.worktreeDirectory);
+    } catch (error) {
+      if (error instanceof WorktreeRootError) throw new WorkspaceCreationError(error.message, 400, { cause: error });
+      throw error;
+    }
   }
 
   /** Resolve and validate the plan a confirmation would be based on. */
@@ -190,7 +213,7 @@ export class WorkspaceCreationService {
     request: ParsedWorkspaceCreationRequest,
     signal: AbortSignal,
   ): Promise<PlannedCreation> {
-    const providerRequest = buildProviderRequest(project, request);
+    const providerRequest = await this.providerRequestFor(project, request);
     const target = await this.providers.resolveCreation(project, providerRequest, signal);
     throwIfAborted(signal);
     validateTargetPath(project, target, providerRequest.path);
@@ -255,19 +278,23 @@ export function workspaceCreationHttpStatus(error: unknown, fallback = 500): num
 }
 
 /**
- * Host-derived target path for a request that named no path of its own: a
- * `worktrees/<project>/<name>` tree beside the project's own checkout, so a
- * project's worktrees stay together and outside every existing workspace.
+ * The fallback worktree directory for a project with no configured root: a
+ * `worktrees/<project>` tree beside the project's own checkout, so a project's
+ * worktrees stay together and outside every existing workspace.
  */
-export function defaultWorkspaceCreationPath(projectPath: string, name: string): string {
+export function derivedWorktreeDirectory(projectPath: string): string {
   const project = resolve(projectPath);
   const parent = parse(project).root === project ? project : resolve(project, "..");
-  return resolve(parent, "worktrees", parse(project).base, name);
+  return resolve(parent, "worktrees", parse(project).base);
 }
 
-function buildProviderRequest(project: Project, request: ParsedWorkspaceCreationRequest): ProviderCreateRequest {
+async function buildProviderRequest(
+  project: Project,
+  request: ParsedWorkspaceCreationRequest,
+  worktreeDirectory: (projectPath: string) => string | Promise<string>,
+): Promise<ProviderCreateRequest> {
   const path = request.path === undefined
-    ? defaultWorkspaceCreationPath(project.path, request.name)
+    ? resolve(await worktreeDirectory(project.path), request.name)
     : resolve(request.path);
   return Object.freeze({ name: request.name, baseRef: request.baseRef, path });
 }

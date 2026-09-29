@@ -135,6 +135,24 @@ export interface PiWebAttachmentsConfig {
   defaultFolder?: string;
 }
 
+export interface PiWebWorktreesConfig {
+  /**
+   * Directory that holds the worktrees PI WEB creates for sessions. Absolute
+   * (a leading `~/` expands to the home directory). Each project's worktrees
+   * go in a subdirectory named after the repository, so one root can serve
+   * every project.
+   */
+  root?: string;
+  /**
+   * Whether a new session gets its own worktree. `always` (the default) gives
+   * every new top-level session a fresh detached worktree; `never` starts
+   * sessions in the selected checkout and marks them as shared.
+   */
+  newSession?: PiWebNewSessionWorktreeMode;
+}
+
+export type PiWebNewSessionWorktreeMode = "always" | "never";
+
 export interface PiWebAgentConfig {
   /** Deprecated and ignored: the multi-implementation CLI abstraction was removed; sessions always run on the bundled pi SDK. Detected for the deprecation warning. */
   command?: string;
@@ -170,6 +188,8 @@ export interface PiWebConfigValues {
   uploads?: PiWebUploadsConfig;
   /** Workspace-relative defaults for prompt attachments saved into the workspace. */
   attachments?: PiWebAttachmentsConfig;
+  /** Where PI WEB puts session worktrees, and whether new sessions get one. */
+  worktrees?: PiWebWorktreesConfig;
   /** Maximum accepted HTTP request body size in bytes (uploads/attachments). */
   maxUploadBytes?: number;
   /** When true, LLMs can start new sessions via the spawn_session tool. */
