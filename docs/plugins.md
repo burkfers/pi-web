@@ -103,7 +103,9 @@ Requests and channels are bounded and can fail, time out, or disconnect. A succe
 
 A provider decides which workspaces belong to a project. A primary provider can replace bundled Git for projects it claims. Git is the fallback; without a claimant, the project folder remains usable as a workspace.
 
-Conflicting claims produce a visible error. A provider that claims a project and then fails does not silently hand ownership to another provider. Providers can also offer workspace removal, which runs as a visible terminal operation.
+Conflicting claims produce a visible error. A provider that claims a project and then fails does not silently hand ownership to another provider. Providers can also offer workspace removal and workspace creation. Both run as visible terminal operations: the browser shows the plan the provider produced and runs it only after the user confirms that exact plan. A creation plan is planned twice — once to show, once to run — so a repository that moves in between fails the confirmation instead of running something else.
+
+A provider opts into creation by implementing `describeCreation` and `prepareCreate` together. `describeCreation` publishes the action's label and the base ref the provider prefers for a new workspace; the host calls it once per resolution, so it must stay cheap. `prepareCreate` validates one request against live state and returns the plan for it. The host owns the target path and generic path safety, and requires the plan to target exactly the path it validated.
 
 Workspace discovery must be available before host session services start. If a package needs both a provider and session-backed features, use two plugin entries in the same package. There is no need to split the distribution into separate packages.
 

@@ -102,6 +102,7 @@
             <a href="#remote-subscription-login">Subscription login on a remote machine</a>
             <a href="#laptop-or-server">Laptop or server?</a>
             <a href="#plugins">Can I use local plugins?</a>
+            <a href="#create-worktree">How do I start a session in its own worktree?</a>
             <a href="#worktree-list-out-of-date">A worktree I created is missing</a>
             <a href="#sessions-stop">Sessions stop unexpectedly</a>
             <a href="#model-response-terminated">Model responses fail with 'terminated'</a>
@@ -317,19 +318,42 @@
             <article id="worktree-list-out-of-date" class="faq-item">
               <h2>A worktree I created or deleted outside PI WEB is missing or still listed</h2>
               <p>
-                PI WEB does not register worktrees. It lists the git worktrees of the selected project on demand, so
-                worktrees you create or delete with <code>git worktree</code>, a terminal, or another tool are picked up
-                without any adopt or import step. This works the same way on remote machines.
+                PI WEB lists the git worktrees of the selected project on demand, so worktrees you create or delete with
+                <code>git worktree</code>, a terminal, or another tool are picked up without any adopt or import step.
+                This works the same way on remote machines.
               </p>
               <p>
-                The workspace list is re-read when the PI WEB tab regains focus or becomes visible again, not
-                continuously. If a worktree appeared while you were already looking at PI WEB, switch to another window
-                or tab and back, and the list updates. Your selected workspace, session, and scroll position are kept.
+                The list is re-read when the PI WEB tab regains focus, and when a workspace panel notices that what it
+                shows no longer matches the list — switching a worktree to another branch in a terminal is picked up
+                within a few seconds without switching tabs. Re-reads are limited to one every ten seconds, so a busy
+                agent cannot turn every command into a refresh. Your selected workspace, session, and scroll position are
+                kept.
               </p>
               <p>
                 Worktrees whose checkout directory no longer exists are hidden, so a directory you removed with
                 <code>rm -rf</code> instead of <code>git worktree remove</code> stops appearing as a selectable
                 workspace. Git still tracks it until you run <code>git worktree prune</code>.
+              </p>
+            </article>
+
+            <article id="create-worktree" class="faq-item">
+              <h2>How do I start a session in its own worktree?</h2>
+              <p>
+                Use <strong>+ New worktree</strong> under the workspace list. Name it, check the base ref it should
+                start from, and PI WEB shows exactly what will run before anything happens. The default path sits in a
+                <code>worktrees/&lt;project&gt;/&lt;name&gt;</code> tree beside the project checkout; override it in the
+                dialog's <em>Path</em> field if you keep worktrees elsewhere.
+              </p>
+              <p>
+                The new worktree starts with a detached HEAD at that commit: no branch is created, so nothing is named
+                until the work has a direction. Check out a branch, or create one, when you want one — the workspace
+                label and the Git panel follow the branch you choose. PI WEB then selects the new workspace, starts a
+                session in it, and focuses the prompt, so the next thing you do is the work.
+              </p>
+              <p>
+                A detached worktree can hold commits that no branch points at, and deleting the workspace deletes them.
+                The delete confirmation names that count before you confirm, and the Git panel keeps showing it while
+                you work.
               </p>
             </article>
 
