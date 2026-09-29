@@ -83,6 +83,7 @@ import { createWorkspaceProviderRuntimeSnapshot } from "./workspaces/workspaceCa
 import { WorkspaceRemovalService } from "./workspaces/workspaceRemovalService.js";
 import { WorkspaceCreationService } from "./workspaces/workspaceCreationService.js";
 import { workspaceContextPromptSection } from "./sessions/workspaceContextSections.js";
+import { detachedWorktreePromptSection } from "./sessions/detachedWorktreeContextSection.js";
 
 const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
 const serverPluginRecovery = loadServerPluginRecoveryConfig({ env: daemonEnvironment });
@@ -327,11 +328,18 @@ async function createSessionDaemonRuntime() {
       // Resolved per session start, from the live workspace authority: which
       // workspaces a project has, and which one this session is in, are facts
       // about this session rather than about the deployment.
-      workspaceContextSections: async (cwd: string) => await workspaceContextPromptSection(cwd, {
-        listProjects: () => projects.list(),
-        listWorkspaces: (project) => workspaceProviders.list(project),
-        warn: (message: string, error: unknown) => { app.log.warn({ err: error, cwd }, message); },
-      }),
+      workspaceContextSections: async (cwd: string, header: unknown) => [
+        ...await workspaceContextPromptSection(cwd, {
+          listProjects: () => projects.list(),
+          listWorkspaces: (project) => workspaceProviders.list(project),
+          warn: (message: string, error: unknown) => { app.log.warn({ err: error, cwd }, message); },
+        }),
+        ...await detachedWorktreePromptSection(cwd, header, {
+          listProjects: () => projects.list(),
+          listWorkspaces: (project) => workspaceProviders.list(project),
+          warn: (message: string, error: unknown) => { app.log.warn({ err: error, cwd }, message); },
+        }),
+      ],
       extensionDialogsTimeoutMs: config.extensionDialogsTimeoutMs,
       notificationStore,
       unreadStore,

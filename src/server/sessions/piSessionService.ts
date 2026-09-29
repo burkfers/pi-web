@@ -975,7 +975,7 @@ export async function resolveWebProjectTrusted(resolution: WebProjectTrustResolu
  * nothing to append, leaving the loader exactly as pi configures it.
  */
 /** Resolves the per-session workspace section for one session's working directory. */
-export type WorkspaceContextSectionResolver = (cwd: string) => Promise<readonly string[]>;
+export type WorkspaceContextSectionResolver = (cwd: string, header: unknown) => Promise<readonly string[]>;
 
 export function piWebResourceLoaderOptions(
   appendSystemPromptSections: readonly string[],
@@ -997,7 +997,11 @@ function createDefaultRuntimeFactory(
   return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel, initialThinkingLevel, delegationToolsEnabled }) => {
     // Resolved per session start, not once per daemon: which workspaces exist,
     // and which one this session is in, are facts about this session.
-    const sessionSections = workspaceContextSections === undefined ? [] : await workspaceContextSections(cwd);
+    // The live header is part of the input because a section can depend on what
+    // this session recorded about itself, not only on where it runs.
+    const sessionSections = workspaceContextSections === undefined
+      ? []
+      : await workspaceContextSections(cwd, sessionManager.getHeader());
     const sessionResourceLoaderOptions = piWebResourceLoaderOptions([...appendSystemPromptSections, ...sessionSections]);
     // PI WEB always honors pi's project-trust model. When the workspace ships
     // trust-requiring resources, trust is resolved exactly once, mirroring the
