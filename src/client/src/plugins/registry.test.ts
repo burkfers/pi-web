@@ -272,7 +272,7 @@ describe("PluginRegistry", () => {
 
     const owned = createContext({
       selectedMachine: testMachine("remote-1"),
-      selectedWorkspace: testWorkspace({ provider: { pluginId: "board-tools", capabilities: { remove: false } } }),
+      selectedWorkspace: testWorkspace({ provider: { pluginId: "board-tools", capabilities: { remove: false, create: false } } }),
     });
     const action = registry.getActions(owned.context)[0];
     expect(action).toMatchObject({ id: `${runtimePluginId}:open`, enabled: true });
@@ -281,7 +281,7 @@ describe("PluginRegistry", () => {
 
     const runtimeOwned = createContext({
       selectedMachine: testMachine("remote-1"),
-      selectedWorkspace: testWorkspace({ provider: { pluginId: runtimePluginId, capabilities: { remove: false } } }),
+      selectedWorkspace: testWorkspace({ provider: { pluginId: runtimePluginId, capabilities: { remove: false, create: false } } }),
     });
     expect(registry.getActions(runtimeOwned.context)[0]?.enabled).toBe(false);
   });

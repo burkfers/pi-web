@@ -25,6 +25,7 @@ import type {
   TerminalCommandRun,
   TerminalCommandRunHandle,
   TerminalCommandRunStatus,
+  WorkspaceCreationPresentation,
   WorkspaceProviderCapabilities,
   WorkspaceProviderMetadata,
   WorkspaceRemovalPresentation,
@@ -57,6 +58,7 @@ export type {
   TerminalCommandRun,
   TerminalCommandRunHandle,
   TerminalCommandRunStatus,
+  WorkspaceCreationPresentation,
   WorkspaceProviderCapabilities,
   WorkspaceProviderMetadata,
   WorkspaceRemovalPresentation,
@@ -375,6 +377,32 @@ export interface WorkspaceRemovalHostState extends WorkspaceRemovalPresentation 
   readonly precondition: string;
 }
 
+/** One browser request to preview or perform a workspace creation. */
+export interface WorkspaceCreationRequest {
+  /** Directory name for the new workspace. */
+  readonly name: string;
+  /** Commit-ish the new workspace starts at. */
+  readonly baseRef: string;
+  /** Absolute target path; omitted to use the host-derived default. */
+  readonly path?: string;
+  /** Required to execute; the token issued by the matching preview. */
+  readonly precondition?: string;
+}
+
+/** The provider's plan for one creation, as the user is asked to confirm it. */
+export interface WorkspaceCreationPreview {
+  /** Absolute path the new workspace will occupy. */
+  readonly path: string;
+  /** Label the new workspace is expected to be listed under. */
+  readonly label: string;
+  /** Provider-authored statement of what will be created. */
+  readonly confirmation: string;
+  /** Exact command the host runs once this plan is confirmed. */
+  readonly command: string;
+  /** Opaque token binding this plan to its confirmation. */
+  readonly precondition: string;
+}
+
 /**
  * Per-project Pi trust state for a workspace path, as stored in the agent
  * directory's `trust.json` (shared with the Pi CLI).
@@ -410,6 +438,8 @@ export interface WorkspaceProviderResolution {
   readonly projectId: string;
   readonly ownerPluginId?: string;
   readonly workspaces: readonly Workspace[];
+  /** Creation affordance, present only when the owner provider supports it. */
+  readonly creation?: WorkspaceCreationPresentation;
   readonly diagnostics: readonly WorkspaceProviderDiagnostic[];
 }
 

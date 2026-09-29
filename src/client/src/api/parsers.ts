@@ -186,12 +186,14 @@ export function parseWorkspaceProviderResolution(value: unknown): WorkspaceProvi
   if (workspaces.length === 0 || workspaces.some((workspace) => workspace.projectId !== projectId)) {
     throw new Error("Workspace resolution contains invalid project workspaces");
   }
+  const creation = parseWorkspaceCreationPresentation(record["creation"]);
   const diagnostics = arrayOf(parseWorkspaceProviderDiagnostic)(record["diagnostics"]);
   return Object.freeze({
     status,
     projectId,
     ...(ownerPluginId === undefined ? {} : { ownerPluginId }),
     workspaces: Object.freeze(workspaces),
+    ...(creation === undefined ? {} : { creation }),
     diagnostics: Object.freeze(diagnostics),
   });
 }
@@ -236,8 +238,21 @@ function optionalWorkspaceProviderMetadata(value: unknown): Workspace["provider"
     pluginId: requireString(value, "pluginId"),
     capabilities: Object.freeze({
       remove: requireBoolean(capabilities, "remove"),
+      // Older servers predate creation; a missing flag means "cannot create".
+      create: optionalBoolean(capabilities, "create") ?? false,
     }),
     ...optionalField("metadata", metadata === undefined ? undefined : parseJsonObject(metadata, "workspace provider metadata")),
+  });
+}
+
+function parseWorkspaceCreationPresentation(value: unknown): WorkspaceProviderResolution["creation"] {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid workspace creation field");
+  const actionLabel = requireNonEmptyString(value, "actionLabel");
+  const defaultBaseRef = optionalString(value, "defaultBaseRef");
+  return Object.freeze({
+    actionLabel,
+    ...(defaultBaseRef === undefined ? {} : { defaultBaseRef }),
   });
 }
 

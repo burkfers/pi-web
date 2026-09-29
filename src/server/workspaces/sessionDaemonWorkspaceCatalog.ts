@@ -107,6 +107,7 @@ function parseWorkspaceProviderResolution(value: unknown, expectedProjectId: str
   }
 
   const workspaces = parseWorkspaceList(value["workspaces"], projectId);
+  const creation = parseCreation(value["creation"]);
   const diagnostics = parseArray(
     value["diagnostics"],
     "workspace provider diagnostics",
@@ -117,6 +118,7 @@ function parseWorkspaceProviderResolution(value: unknown, expectedProjectId: str
     projectId,
     ...(ownerPluginId === undefined ? {} : { ownerPluginId }),
     workspaces: Object.freeze(workspaces),
+    ...(creation === undefined ? {} : { creation }),
     diagnostics: Object.freeze(diagnostics),
   });
 }
@@ -209,8 +211,22 @@ function parseProvider(value: unknown, workspaceLabel: string): NonNullable<Work
     pluginId: requirePluginId(value, "pluginId", label),
     capabilities: Object.freeze({
       remove: requireBoolean(capabilities, "remove", `${label} capabilities`),
+      // Older daemons predate creation; a missing flag means "cannot create".
+      create: optionalBoolean(capabilities, "create", `${label} capabilities`) ?? false,
     }),
     ...(metadata === undefined ? {} : { metadata }),
+  });
+}
+
+function parseCreation(value: unknown): WorkspaceProviderAuthorityResolution["creation"] {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw protocolError("workspace resolution creation must be an object");
+  const label = "workspace resolution creation";
+  const actionLabel = requireString(value, "actionLabel", label);
+  const defaultBaseRef = optionalString(value, "defaultBaseRef", label);
+  return Object.freeze({
+    actionLabel,
+    ...(defaultBaseRef === undefined ? {} : { defaultBaseRef }),
   });
 }
 
@@ -394,6 +410,13 @@ function optionalPluginId(record: Record<string, unknown>, field: string, label:
 
 function requireBoolean(record: Record<string, unknown>, field: string, label: string): boolean {
   const value = record[field];
+  if (typeof value !== "boolean") throw protocolError(`${label} ${field} must be a boolean`);
+  return value;
+}
+
+function optionalBoolean(record: Record<string, unknown>, field: string, label: string): boolean | undefined {
+  const value = record[field];
+  if (value === undefined) return undefined;
   if (typeof value !== "boolean") throw protocolError(`${label} ${field} must be a boolean`);
   return value;
 }

@@ -476,7 +476,7 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     const selected = workspace(repo.id, "/repo-feature", {
       provider: {
         pluginId: "owner",
-        capabilities: { remove: false },
+        capabilities: { remove: false, create: false },
         metadata: { nested: { marker: "old" }, list: [1, true] },
       },
       effectiveConfig: { uploads: { defaultFolder: "old-uploads" } },
@@ -538,7 +538,7 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     const selected = workspace(repo.id, "/repo-feature", {
       provider: {
         pluginId: "owner",
-        capabilities: { remove: true },
+        capabilities: { remove: true, create: false },
         metadata: { nested: [1, { ready: true }] },
       },
       removal: { actionLabel: "Disconnect", confirmation: "Disconnect?", precondition: "v1.current" },
@@ -548,7 +548,7 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     const equalSelected = workspace(repo.id, "/repo-feature", {
       provider: {
         pluginId: "owner",
-        capabilities: { remove: true },
+        capabilities: { remove: true, create: false },
         metadata: { nested: [1, { ready: true }] },
       },
       removal: { actionLabel: "Disconnect", confirmation: "Disconnect?", precondition: "v1.current" },

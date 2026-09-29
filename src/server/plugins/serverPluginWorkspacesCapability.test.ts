@@ -76,7 +76,7 @@ describe("server plugin workspaces capability", () => {
         isMain: true,
         provider: {
           pluginId: "alpha",
-          capabilities: { remove: true },
+          capabilities: { remove: true, create: false },
           metadata: { revision: 1, nested: [true] },
         },
       },

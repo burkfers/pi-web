@@ -1564,6 +1564,55 @@ describe("server plugin runtime", () => {
     expect(runtime.pairedBackendContributions().map(({ pluginId }) => pluginId)).toEqual(["channel-only", "request-only"]);
   });
 
+  it("carries every workspace provider member across the activation boundary", async () => {
+    // The snapshot copies a known member list, so a member missing from it is
+    // dropped and the host reports the capability as absent while the plugin
+    // believes it is available. This pins the whole provider contract.
+    const plan = {
+      title: "Create worktree",
+      command: "git worktree add --detach '/w' main",
+      path: "/w",
+      label: "detached@abc1234",
+      confirmation: "Create it?",
+    };
+    const provider: WorkspaceProvider = {
+      fallback: true,
+      probe: () => Promise.resolve("claim"),
+      list: () => Promise.resolve([]),
+      describeCreation: () => Promise.resolve({ actionLabel: "New worktree", defaultBaseRef: "main" }),
+      prepareCreate: () => Promise.resolve(plan),
+      prepareRemove: () => Promise.resolve({ title: "Remove", command: "tool remove" }),
+    };
+    const importer: ServerPluginModuleImporter = (url) => {
+      const pluginId = pluginIdFromUrl(url);
+      if (pluginId !== "creator") return Promise.resolve(pluginModule("Later", {}));
+      return Promise.resolve(pluginModule("Creator", { workspaceProvider: provider }));
+    };
+
+    const runtime = await createServerPluginRuntime({
+      catalog: { snapshot: () => Promise.resolve(testSnapshot([entry("creator")])) },
+      importer,
+      logger: testLogger(),
+    });
+
+    const published = runtime.providerContributions()[0]?.provider;
+    expect(published).toBeDefined();
+    if (published === undefined) throw new Error("Expected a published provider");
+    expect(Object.keys(published).sort()).toEqual([
+      "describeCreation", "fallback", "list", "prepareCreate", "prepareRemove", "probe",
+    ]);
+    const signal = new AbortController().signal;
+    await expect(published.describeCreation?.({ id: "p", name: "P", path: "/p" }, signal))
+      .resolves.toEqual({ actionLabel: "New worktree", defaultBaseRef: "main" });
+    await expect(published.prepareCreate?.({
+      project: { id: "p", name: "P", path: "/p" },
+      source: { key: "root", path: "/p", label: "P", isMain: true },
+      request: { name: "w", baseRef: "main", path: "/w" },
+      signal,
+    })).resolves.toEqual(plan);
+    await runtime.stop();
+  });
+
   it("publishes validated snapshots rather than mutable activation properties", async () => {
     const provider = testProvider();
     const mutableActivation: Record<string, unknown> = {

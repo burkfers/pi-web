@@ -19,7 +19,7 @@ const workspace: Workspace = {
   ...providerlessWorkspace,
   provider: {
     pluginId: "changes.owner",
-    capabilities: { remove: false },
+    capabilities: { remove: false, create: false },
   },
 };
 

@@ -91,7 +91,7 @@ describe("public browser plugin API", () => {
     expectTypeOf<ReadonlyKeys<Workspace>>().toEqualTypeOf<keyof Workspace>();
     expectTypeOf<ReadonlyKeys<WorkspaceProviderMetadata>>().toEqualTypeOf<keyof WorkspaceProviderMetadata>();
     expectTypeOf<ReadonlyKeys<WorkspaceProviderCapabilities>>().toEqualTypeOf<keyof WorkspaceProviderCapabilities>();
-    expectTypeOf<keyof WorkspaceProviderCapabilities>().toEqualTypeOf<"remove">();
+    expectTypeOf<keyof WorkspaceProviderCapabilities>().toEqualTypeOf<"remove" | "create">();
     expectTypeOf<ReadonlyKeys<WorkspaceRemovalPresentation>>().toEqualTypeOf<keyof WorkspaceRemovalPresentation>();
   });
 

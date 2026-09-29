@@ -13,6 +13,7 @@ import type {
   ServerPluginPeerChannelOpenContext,
   ServerPluginPeerRequestContext,
   ProjectInput,
+  ProviderCreateContext,
   ProviderRemoveContext,
   ServerPluginActivation,
   ServerPluginActivationContext,
@@ -1359,20 +1360,33 @@ function isPromiseLike(value: unknown): value is PromiseLike<void> {
 
 function snapshotWorkspaceProvider(value: unknown): WorkspaceProvider {
   if (!isRecord(value)) throw new IncompatibleServerPluginError("Server plugin workspaceProvider is invalid");
+  // Every member of the provider contract is copied explicitly: a member that
+  // is not listed here is silently dropped, and the host would then report the
+  // capability as absent while the plugin believes it is available.
   const candidate = {
     fallback: value["fallback"],
     probe: value["probe"],
     list: value["list"],
+    describeCreation: value["describeCreation"],
+    prepareCreate: value["prepareCreate"],
     prepareRemove: value["prepareRemove"],
   };
   if (!isWorkspaceProvider(candidate)) throw new IncompatibleServerPluginError("Server plugin workspaceProvider is invalid");
   const probe = candidate.probe.bind(value);
   const list = candidate.list.bind(value);
+  const describeCreation = candidate.describeCreation?.bind(value);
+  const prepareCreate = candidate.prepareCreate?.bind(value);
   const prepareRemove = candidate.prepareRemove?.bind(value);
   return Object.freeze({
     ...(candidate.fallback === undefined ? {} : { fallback: candidate.fallback }),
     probe: (project: ProjectInput, signal: AbortSignal) => probe(project, signal),
     list: (project: ProjectInput, signal: AbortSignal) => list(project, signal),
+    ...(describeCreation === undefined
+      ? {}
+      : { describeCreation: (project: ProjectInput, signal: AbortSignal) => describeCreation(project, signal) }),
+    ...(prepareCreate === undefined
+      ? {}
+      : { prepareCreate: (context: ProviderCreateContext) => prepareCreate(context) }),
     ...(prepareRemove === undefined ? {} : { prepareRemove: (context: ProviderRemoveContext) => prepareRemove(context) }),
   });
 }
@@ -1382,10 +1396,14 @@ function isWorkspaceProvider(value: unknown): value is WorkspaceProvider {
   const fallback = value["fallback"];
   const probe = value["probe"];
   const list = value["list"];
+  const describeCreation = value["describeCreation"];
+  const prepareCreate = value["prepareCreate"];
   const prepareRemove = value["prepareRemove"];
   return (fallback === undefined || typeof fallback === "boolean")
     && typeof probe === "function"
     && typeof list === "function"
+    && (describeCreation === undefined || typeof describeCreation === "function")
+    && (prepareCreate === undefined || typeof prepareCreate === "function")
     && (prepareRemove === undefined || typeof prepareRemove === "function");
 }
 

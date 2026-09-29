@@ -79,7 +79,7 @@ describe("PluginBackendRegistry", () => {
       label: "feature/paired",
       provider: {
         pluginId: "git",
-        capabilities: { remove: false },
+        capabilities: { remove: false, create: false },
         metadata: { branch: "feature/paired" },
       },
     });

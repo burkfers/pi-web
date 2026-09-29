@@ -60,7 +60,7 @@ describe("WorkspaceProviderRegistry", () => {
         isMain: true,
         provider: {
           pluginId: "primary",
-          capabilities: { remove: false },
+          capabilities: { remove: false, create: false },
           metadata: { changeId: "abc", nested: [1, true, null] },
         },
       }),
@@ -69,7 +69,7 @@ describe("WorkspaceProviderRegistry", () => {
         path: hostPath("/linked"),
         provider: {
           pluginId: "primary",
-          capabilities: { remove: true },
+          capabilities: { remove: true, create: false },
         },
       }),
     ]);
@@ -668,6 +668,93 @@ describe("WorkspaceProviderRegistry", () => {
       allowedCwds: [hostPath("/repo"), hostPath("/new-linked")],
     });
     await expect(resolver.resolveSpawnTarget(hostPath("/repo"), hostPath("/new-linked"))).resolves.toEqual({ allowed: true, cwd: hostPath("/new-linked") });
+  });
+});
+
+describe("WorkspaceProviderRegistry creation", () => {
+  function creating(overrides: Partial<WorkspaceProvider> = {}): Partial<WorkspaceProvider> {
+    return {
+      describeCreation: () => Promise.resolve({ actionLabel: "New worktree", defaultBaseRef: "origin/main" }),
+      prepareCreate: () => Promise.resolve({
+        title: "Create worktree",
+        command: "git worktree add --detach '/wt' main",
+        path: hostPath("/wt"),
+        label: "detached@abc1234",
+        confirmation: "Create /wt?",
+      }),
+      ...overrides,
+    };
+  }
+
+  function claimingRoot(overrides: Partial<WorkspaceProvider>): WorkspaceProvider {
+    return provider({
+      probe: () => Promise.resolve("claim"),
+      list: () => Promise.resolve([workspace("root", hostPath("/repo"), true)]),
+      ...overrides,
+    });
+  }
+
+  it("publishes the creation affordance and capability when the provider implements creation", async () => {
+    const registry = registryFor([contribution("git", claimingRoot(creating()))]);
+
+    const resolution = await registry.resolve(project);
+
+    expect(resolution.creation).toEqual({ actionLabel: "New worktree", defaultBaseRef: "origin/main" });
+    expect(resolution.workspaces[0]?.provider?.capabilities).toEqual({ remove: false, create: true });
+    expect(Object.isFrozen(resolution.creation)).toBe(true);
+  });
+
+  it("omits creation when only one half of the capability is implemented", async () => {
+    const { describeCreation, prepareCreate } = creating();
+    if (describeCreation === undefined || prepareCreate === undefined) throw new Error("Fixture must implement creation");
+    const planOnly = registryFor([contribution("git", claimingRoot({ prepareCreate }))]);
+    const descriptorOnly = registryFor([contribution("git", claimingRoot({ describeCreation }))]);
+
+    expect((await planOnly.resolve(project)).creation).toBeUndefined();
+    expect((await descriptorOnly.resolve(project)).creation).toBeUndefined();
+    expect((await planOnly.resolve(project)).workspaces[0]?.provider?.capabilities.create).toBe(false);
+  });
+
+  it("keeps the listing usable when the creation descriptor fails", async () => {
+    const { registry, logger } = registryFixture([contribution("git", claimingRoot(
+      creating({ describeCreation: () => Promise.reject(new Error("git unavailable")) }),
+    ))]);
+
+    const resolution = await registry.resolve(project);
+
+    expect(resolution.status).toBe("provider");
+    expect(resolution.workspaces).toHaveLength(1);
+    expect(resolution.creation).toBeUndefined();
+    expect(resolution.workspaces[0]?.provider?.capabilities.create).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "describeCreation" }),
+      expect.stringContaining("creation is unavailable"),
+    );
+  });
+
+  it("rejects an invalid creation descriptor without failing the listing", async () => {
+    const { registry } = registryFixture([contribution("git", claimingRoot(
+      creating({ describeCreation: () => Promise.resolve({ actionLabel: "  " }) }),
+    ))]);
+
+    const resolution = await registry.resolve(project);
+
+    expect(resolution.workspaces).toHaveLength(1);
+    expect(resolution.creation).toBeUndefined();
+  });
+
+  it("bounds a hanging creation descriptor like any other provider call", async () => {
+    vi.useFakeTimers();
+    const { registry } = registryFixture([contribution("git", claimingRoot(
+      creating({ describeCreation: () => new Promise(() => undefined) }),
+    ))], { providerTimeoutMs: 50 });
+
+    const pending = registry.resolve(project);
+    await vi.advanceTimersByTimeAsync(60);
+    const resolution = await pending;
+
+    expect(resolution.creation).toBeUndefined();
+    expect(resolution.workspaces).toHaveLength(1);
   });
 });
 

@@ -695,7 +695,7 @@ describe("API parsers", () => {
       isMain: false,
       provider: {
         pluginId: "workspace-provider",
-        capabilities: { remove: true },
+        capabilities: { remove: true, create: false },
         metadata: { changeId: "abc", nested: [1, true, null] },
       },
       removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?", precondition: "v1.confirmed" },
@@ -708,7 +708,7 @@ describe("API parsers", () => {
       isMain: false,
       provider: {
         pluginId: "workspace-provider",
-        capabilities: { remove: true },
+        capabilities: { remove: true, create: false },
         metadata: { changeId: "abc", nested: [1, true, null] },
       },
       removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?", precondition: "v1.confirmed" },
@@ -725,7 +725,7 @@ describe("API parsers", () => {
       isMain: false,
       provider: {
         pluginId: "workspace-provider",
-        capabilities: { remove: true },
+        capabilities: { remove: true, create: false },
         metadata: { nested: [{ ready: true }] },
       },
       removal: { actionLabel: "Remove workspace", confirmation: "Remove secondary?", precondition: "v1.confirmed" },
@@ -843,7 +843,7 @@ describe("API parsers", () => {
       isMain: true,
       provider: {
         pluginId: "workspace-provider",
-        capabilities: { remove: false },
+        capabilities: { remove: false, create: false },
         metadata: { invalid: undefined },
       },
       effectiveConfig: {},

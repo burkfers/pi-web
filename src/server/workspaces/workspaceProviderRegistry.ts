@@ -12,6 +12,7 @@ import type {
   JsonObject,
   JsonValue,
   Project,
+  WorkspaceCreationPresentation,
   WorkspaceListing,
   WorkspaceProviderAuthorityResolution,
   WorkspaceProviderDiagnostic,
@@ -32,7 +33,7 @@ export type {
 const DEFAULT_PROVIDER_TIMEOUT_MS = 10_000;
 
 type ProviderTier = WorkspaceProviderTier;
-type ProviderOperation = "probe" | "list" | "prepareRemove";
+type ProviderOperation = "probe" | "list" | "prepareRemove" | "describeCreation";
 
 export interface WorkspaceProviderRegistryLogger {
   warn(details: Record<string, unknown>, message: string): void;
@@ -238,7 +239,7 @@ export class WorkspaceProviderRegistry {
           (operationSignal) => contribution.provider.list(input, operationSignal),
           signal,
         );
-        validated = await validateProviderWorkspaces(input, contribution, listed, this.pathInspector, signal);
+        validated = await validateProviderWorkspaces(input, contribution, listed, this.pathInspector, false, signal);
       } catch (error) {
         if (signal?.aborted === true) throw abortError(signal);
         this.throwIfShuttingDown();
@@ -381,12 +382,21 @@ export class WorkspaceProviderRegistry {
         (signal) => contribution.provider.list(project, signal),
         dispatchSignal,
       );
-      const validated = await validateProviderWorkspaces(project, contribution, listed, this.pathInspector, dispatchSignal);
+      const creation = await this.resolveCreationPresentation(project, contribution, dispatchSignal);
+      const validated = await validateProviderWorkspaces(
+        project,
+        contribution,
+        listed,
+        this.pathInspector,
+        creation !== undefined,
+        dispatchSignal,
+      );
       return Object.freeze({
         status: "provider",
         projectId: project.id,
         ownerPluginId: contribution.pluginId,
         workspaces: Object.freeze(validated.map(({ workspace }) => workspace)),
+        ...(creation === undefined ? {} : { creation }),
         diagnostics: Object.freeze([...diagnostics]),
       });
     } catch (error) {
@@ -411,6 +421,38 @@ export class WorkspaceProviderRegistry {
   closeAll(reason = "Session daemon shutdown"): Promise<void> {
     this.closePromise ??= this.closeProviderOperations(reason);
     return this.closePromise;
+  }
+
+  /**
+   * Project-level creation affordance from the current owner. Omitted when the
+   * provider does not implement creation, and also when its descriptor fails:
+   * a broken affordance must not degrade the workspace listing itself.
+   */
+  private async resolveCreationPresentation(
+    project: ProjectInput,
+    contribution: ServerPluginProviderContribution,
+    dispatchSignal?: AbortSignal,
+  ): Promise<WorkspaceCreationPresentation | undefined> {
+    const describe = contribution.provider.describeCreation?.bind(contribution.provider);
+    if (describe === undefined || contribution.provider.prepareCreate === undefined) return undefined;
+
+    try {
+      const value: unknown = await this.runProviderOperation(
+        contribution.pluginId,
+        "describeCreation",
+        (signal) => describe(project, signal),
+        dispatchSignal,
+      );
+      return parseCreationDescriptor(value, contribution.pluginId);
+    } catch (error) {
+      if (dispatchSignal?.aborted === true) throw abortError(dispatchSignal);
+      this.throwIfShuttingDown();
+      this.options.logger.warn(
+        { err: error, projectId: project.id, pluginId: contribution.pluginId, operation: "describeCreation" },
+        "workspace provider creation descriptor failed; creation is unavailable",
+      );
+      return undefined;
+    }
   }
 
   private async closeProviderOperations(reason: string): Promise<void> {
@@ -462,6 +504,7 @@ async function validateProviderWorkspaces(
   contribution: ServerPluginProviderContribution,
   value: unknown,
   pathInspector: WorkspacePathInspector,
+  creationAvailable: boolean,
   signal?: AbortSignal,
 ): Promise<ValidatedProviderWorkspace[]> {
   if (!Array.isArray(value)) {
@@ -503,7 +546,10 @@ async function validateProviderWorkspaces(
       : hostRemovalPresentation(project, contribution, candidate.key, path, removal);
     const provider = Object.freeze({
       pluginId: contribution.pluginId,
-      capabilities: Object.freeze({ remove: removal !== undefined }),
+      capabilities: Object.freeze({
+        remove: removal !== undefined,
+        create: creationAvailable,
+      }),
       ...(metadata === undefined ? {} : { metadata }),
     });
     const workspace: WorkspaceListing = {
@@ -562,6 +608,24 @@ function parseRemoval(value: unknown, label: string): ProviderWorkspaceRemovalPr
   if (typeof actionLabel !== "string" || actionLabel === "") throw new WorkspaceProviderContractError(`${label} actionLabel must be a non-empty string`);
   if (typeof confirmation !== "string" || confirmation === "") throw new WorkspaceProviderContractError(`${label} confirmation must be a non-empty string`);
   return Object.freeze({ actionLabel, confirmation });
+}
+
+function parseCreationDescriptor(value: unknown, pluginId: string): WorkspaceCreationPresentation {
+  if (!isRecord(value)) {
+    throw new WorkspaceProviderContractError(`Workspace provider ${pluginId} creation descriptor must be an object`);
+  }
+  const actionLabel = value["actionLabel"];
+  if (typeof actionLabel !== "string" || actionLabel.trim() === "") {
+    throw new WorkspaceProviderContractError(`Workspace provider ${pluginId} creation actionLabel must be a non-empty string`);
+  }
+  const defaultBaseRef = value["defaultBaseRef"];
+  if (defaultBaseRef !== undefined && (typeof defaultBaseRef !== "string" || defaultBaseRef.trim() === "")) {
+    throw new WorkspaceProviderContractError(`Workspace provider ${pluginId} creation defaultBaseRef must be a non-empty string`);
+  }
+  return Object.freeze({
+    actionLabel,
+    ...(defaultBaseRef === undefined ? {} : { defaultBaseRef }),
+  });
 }
 
 function hostRemovalPresentation(

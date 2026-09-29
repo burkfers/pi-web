@@ -249,7 +249,7 @@ describe("sessiond persisted server plugin recovery", () => {
         isMain: true,
         provider: {
           pluginId: "a-workspace-provider",
-          capabilities: { remove: false },
+          capabilities: { remove: false, create: false },
           metadata: { topology: "live" },
         },
       },
