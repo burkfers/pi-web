@@ -17,3 +17,7 @@ dist/
 
 # Dev docs site staging output (scripts/build-docs-dev.mjs).
 /docs/.deploy/
+
+# Core dumps from a crashed local process.
+/core
+/core.*

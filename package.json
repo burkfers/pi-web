@@ -48,7 +48,7 @@
   ],
   "scripts": {
     "dev": "bash -c 'trap \"kill 0\" EXIT; npm run dev:sessiond & npm run dev:web & npm run dev:client & wait'",
- "dev:pair": "bash scripts/dev-pair.sh",
+    "dev:pair": "bash scripts/dev-pair.sh",
     "dev:sessiond": "node scripts/dev-sessiond.mjs --watch",
     "dev:web": "tsc -p tsconfig.plugins.json && node scripts/dev-web.mjs",
     "dev:server": "npm run dev:web",
@@ -142,7 +142,7 @@
     "url": "https://github.com/jmfederico/pi-web/issues"
   },
   "homepage": "https://pi-web.dev/",
-  "packageManager": "npm@11.11.0",
+  "packageManager": "pnpm@12.8.1",
   "peerDependencies": {
     "@earendil-works/pi-agent-core": ">=0.87.0",
     "@earendil-works/pi-ai": ">=0.87.0",
