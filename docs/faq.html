@@ -103,6 +103,7 @@
             <a href="#laptop-or-server">Laptop or server?</a>
             <a href="#plugins">Can I use local plugins?</a>
             <a href="#create-worktree">How do I start a session in its own worktree?</a>
+            <a href="#session-worktree-lifecycle">What happens to a session's worktree when I archive or delete it?</a>
             <a href="#worktree-list-out-of-date">A worktree I created is missing</a>
             <a href="#sessions-stop">Sessions stop unexpectedly</a>
             <a href="#model-response-terminated">Model responses fail with 'terminated'</a>
@@ -339,21 +340,43 @@
             <article id="create-worktree" class="faq-item">
               <h2>How do I start a session in its own worktree?</h2>
               <p>
-                Use <strong>+ New worktree</strong> under the workspace list. Name it, check the base ref it should
-                start from, and PI WEB shows exactly what will run before anything happens. The default path sits in a
-                <code>worktrees/&lt;project&gt;/&lt;name&gt;</code> tree beside the project checkout; override it in the
-                dialog's <em>Path</em> field if you keep worktrees elsewhere.
+                By default you do nothing: <strong>New session</strong> creates a detached worktree for the session and
+                starts it there, so two sessions on one project never share a working tree. The worktree's directory
+                name is generated, and it starts at the repository's default branch, so there is nothing to name and
+                nothing to confirm. PI WEB selects the new checkout and focuses the prompt when it is ready.
               </p>
               <p>
-                The new worktree starts with a detached HEAD at that commit: no branch is created, so nothing is named
-                until the work has a direction. Check out a branch, or create one, when you want one — the workspace
-                label and the Git panel follow the branch you choose. PI WEB then selects the new workspace, starts a
-                session in it, and focuses the prompt, so the next thing you do is the work.
+                To work in the checkout itself — a quick look, a branch comparison, or work that has to see the
+                working tree as it is — use <strong>New session in this checkout</strong> in that checkout's ⋯ menu.
+                Those sessions are marked <em>shared</em> on their row, because they have no worktree of their own. A
+                project can also be configured to always share; see
+                <a href="config.html#session-worktrees">Session worktrees</a>.
               </p>
               <p>
-                A detached worktree can hold commits that no branch points at, and deleting the workspace deletes them.
-                The delete confirmation names that count before you confirm, and the Git panel keeps showing it while
-                you work.
+                To create a worktree without starting a session, use <strong>+ New worktree</strong> under the
+                checkout list and name it yourself. Such a worktree is yours: PI WEB does not detach it when a session
+                is archived, and deleting that session does not remove it.
+              </p>
+              <p>
+                A worktree created for a session starts with a detached HEAD: no branch is created, so nothing is
+                named until the work has a direction. Check out a branch, or create one, when you want one — the row's
+                label and the Git panel follow the branch you choose.
+              </p>
+            </article>
+
+            <article id="session-worktree-lifecycle" class="faq-item">
+              <h2>What happens to a session's worktree when I archive or delete the session?</h2>
+              <p>
+                Archiving parks the session and leaves its worktree on disk. A worktree that was sitting on a branch is
+                detached from it first, which releases the branch for the next session without moving it or touching
+                the working tree; the branch and commit it was left at are recorded in the session, and a resumed
+                session is told about them so it does not commit into a detached HEAD by accident. If the detach fails,
+                the archive still happens and the failure is reported.
+              </p>
+              <p>
+                Deleting the session is the one thing that removes the worktree, along with its uncommitted work. A
+                parked session can also give its worktree back without losing the transcript: open the archived row's
+                ⋯ menu and choose <strong>Remove worktree</strong>.
               </p>
             </article>
 

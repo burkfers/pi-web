@@ -140,9 +140,13 @@ Read more: [Configuration reference](https://pi-web.dev/config)
 Clone the repository and run:
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
+
+Dependencies are managed with [pnpm](https://pnpm.io); the lockfile is `pnpm-lock.yaml`, and
+`pnpm install --frozen-lockfile` is what CI and container builds use. Scripts are package-manager
+agnostic, so `npm run <script>` keeps working.
 
 Open the Vite URL, usually:
 

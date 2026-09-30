@@ -1,3 +1,13 @@
+# Hardlink packages out of the shared store instead of copying them: a worktree
+# per session is only affordable if a second checkout of a dependency costs no
+# blocks. The default falls back to copying in this environment, which is a
+# full 579 MB per worktree and defeats the point of the store.
+packageImportMethod: hardlink
+
+# `esbuild` links a platform binary and `node-pty` compiles a native addon in
+# their install scripts; without them pnpm refuses to finish an install rather
+# than silently leaving a broken toolchain. The other two only print funding
+# messages, but pnpm 12 treats any ignored build script as a failed install.
 allowBuilds:
   '@google/genai': true
   esbuild: true

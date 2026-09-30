@@ -131,7 +131,38 @@ Project-local `uploads.defaultFolder` overrides the global upload destination fo
 
 Plugins may own separate project files, such as `.pi-web/tasks.json` for the built-in Workspace Tasks plugin.
 
+Project-local `worktrees.root` overrides the global worktree root for that project, and project-local
+`worktrees.newSession` overrides the global new-session mode; see [Session worktrees](#session-worktrees).
+
 PI WEB also honors one optional project hook; see [Worktree pre-remove hook](#worktree-pre-remove-hook).
+
+## Session worktrees
+
+A new session normally gets a worktree of its own, created before the session starts so the session's working
+directory is an isolated checkout from its first prompt. Both halves of that are configurable:
+
+| Key | Values | Default | Effect |
+| --- | --- | --- | --- |
+| `worktrees.root` | absolute path, `~/` allowed | `worktrees/` beside the checkout | Directory holding the worktrees PI WEB creates. Each project gets a subdirectory named after its checkout, so one root can serve every project. |
+| `worktrees.newSession` | `always`, `never` | `always` | `always` gives every new top-level session its own worktree; `never` starts sessions in the selected checkout and marks them as shared. |
+
+```json
+{
+  "worktrees": {
+    "root": "/mnt/fast-storage/pi-web-worktrees",
+    "newSession": "never"
+  }
+}
+```
+
+The root must be absolute, must not be the filesystem root, and must not be inside the checkout it would nest a
+repository in. A relative root is rejected rather than resolved against the current directory.
+
+Set `worktrees.newSession` to `never` for a repository where a checkout is the point — a small project, or a machine
+where every session's dependencies would cost more disk than the isolation saves. The per-session opt-out in the
+checkout's ⋯ menu covers the same need one session at a time.
+
+Archiving and deleting are documented per session rather than here; see the FAQ entries on worktree lifecycle.
 
 ## Worktree pre-remove hook
 
@@ -158,7 +189,7 @@ Contract:
 - **Exit codes:** `0` lets the removal proceed; any non-zero exit blocks it. The `&&` chain is the fail-closed guarantee — a failing hook keeps the worktree on disk.
 - **Absent hook:** a missing file, or a file without the executable bit (for example after a checkout that lost it), is treated as no hook; PI WEB then runs the removal command on its own.
 
-The composed command is dispatched like any other workspace deletion — same `Delete workspace: <branch>` terminal title — so hook output and failures are visible in the terminal run. If PI WEB cannot probe the hook path because of an unexpected filesystem error, the deletion request fails before any workspace terminals are closed.
+The composed command runs to completion before the request answers, and it does not open a terminal: you asked for the removal, so the result is the worktree being gone, and a failure reports what the command said. PI WEB cannot probe the hook path because of an unexpected filesystem error, the deletion request fails before any workspace terminals are closed.
 
 Example: a hook that stops and removes local dev containers that bind-mount the worktree, so deletion does not leave stale containers behind. The hook is an opaque extension point — the contract does not assume any specific tooling, so use whatever the repository standardizes on:
 
@@ -187,6 +218,8 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 | External filesystem roots | `pathAccess.allowedPaths` | — | Global + project | **Merges**: global roots first, then project roots; duplicates removed | Next file request; refresh existing views if needed |
 | Manual file upload default folder | `uploads.defaultFolder` | — | Global + project | **Overrides**: project value wins for workspaces in that project; otherwise global/default applies | New Upload dialogs and direct drag/drop batches after config/workspace refresh |
 | Prompt attachment default folder | `attachments.defaultFolder` | — | Global + project | **Overrides**: project value wins for workspaces in that project; otherwise global/default applies | New prompt-attachment saves after config/workspace refresh |
+| Worktree root | `worktrees.root` | — | Global + project | **Overrides**: project value wins for that project; otherwise global, otherwise `worktrees/` beside the checkout | Next session that creates a worktree |
+| New sessions get a worktree | `worktrees.newSession` | — | Global + project | **Overrides**: project value wins for that project; otherwise global, otherwise `always` | Next new session |
 | Upload/body limit | `maxUploadBytes` | `PI_WEB_MAX_UPLOAD_BYTES` | Global | Not supported locally | Restart web/API and session daemon on that machine |
 | Agent can spawn sessions | `spawnSessions` | `PI_WEB_SPAWN_SESSIONS` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Tracked subsessions | `subsessions` | `PI_WEB_SUBSESSIONS` | Global/session daemon | Not supported locally; also requires `spawnSessions` | Restart session daemon on that machine |
