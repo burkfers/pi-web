@@ -285,8 +285,52 @@ export interface WorkspaceProvider {
     fallback?: boolean;
     probe(project: ProjectInput, signal: AbortSignal): Promise<ProviderClaim>;
     list(project: ProjectInput, signal: AbortSignal): Promise<ProviderWorkspace[]>;
+    /**
+     * Project-level creation affordance. Required alongside {@link prepareCreate}
+     * for the host to offer creation at all; the host calls it once per
+     * resolution, so it must stay cheap.
+     */
+    describeCreation?(project: ProjectInput, signal: AbortSignal): Promise<ProviderCreationDescriptor>;
+    /**
+     * Validate one creation request and return the command that performs it.
+     * The host calls this to show the plan before the user confirms and again to
+     * execute, so a confirmed plan and a run plan cannot diverge.
+     */
+    prepareCreate?(context: ProviderCreateContext): Promise<WorkspaceCreatePlan>;
     prepareRemove?(context: ProviderRemoveContext): Promise<WorkspaceRemovePlan>;
+    /**
+     * Release a workspace from whatever it is attached to, in place, and report
+     * what it left behind.
+     *
+     * The host calls this when it parks a session and wants its worktree to stop
+     * holding a branch hostage, so it must complete before returning: the answer
+     * is what the host records and later tells the resuming agent about.
+     */
+    detach?(context: ProviderDetachContext): Promise<ProviderDetachResult>;
 }
+export interface ProviderDetachContext {
+    readonly project: ProjectInput;
+    /** The workspace to detach, as the host resolved it. */
+    readonly workspace: Readonly<ProviderWorkspace>;
+    readonly signal: AbortSignal;
+}
+export type ProviderDetachResult = 
+/** The workspace was attached to a branch, which it no longer is. */
+{
+    readonly detached: true;
+    readonly branch: string;
+    readonly head: string;
+}
+/** Nothing to release: the workspace was already detached. */
+ | {
+    readonly detached: false;
+    readonly head?: string;
+}
+/** The provider cannot detach this kind of workspace. */
+ | {
+    readonly detached: false;
+    readonly unsupported: true;
+};
 export type ProviderClaim = "claim" | "pass";
 export interface ProjectInput {
     readonly id: string;
@@ -314,6 +358,57 @@ export interface ProviderRemoveContext {
     /** Host-validated, frozen projection of one listed provider workspace. */
     readonly workspace: Readonly<ProviderWorkspace>;
     readonly signal: AbortSignal;
+}
+/** Project-level creation affordance a provider publishes with its listing. */
+export interface ProviderCreationDescriptor {
+    /** Label for the create action, e.g. "New worktree". */
+    actionLabel: string;
+    /** Commit-ish the provider suggests for a new workspace, when it has a preference. */
+    defaultBaseRef?: string;
+}
+export interface ProviderCreateRequest {
+    /** Directory name for the new workspace, already bounded by the host. */
+    readonly name: string;
+    /**
+     * Commit-ish the new workspace starts at, already bounded by the host.
+     *
+     * Omitted when the host has no opinion — a worktree created for a session
+     * starts wherever the repository says it should — and the provider resolves
+     * its own default. A ref the host does supply is used verbatim.
+     */
+    readonly baseRef?: string;
+    /** Absolute target path, already resolved and path-validated by the host. */
+    readonly path: string;
+}
+export interface ProviderCreateContext {
+    readonly project: ProjectInput;
+    /** Workspace the creation command runs from; never the workspace being created. */
+    readonly source: Readonly<ProviderWorkspace>;
+    readonly request: ProviderCreateRequest;
+    readonly signal: AbortSignal;
+}
+/**
+ * Provider-authored creation plan. The host shows `confirmation` to the user
+ * and runs `command` only after that same plan is confirmed, so both must
+ * describe the same effect. `path` must equal the requested path.
+ */
+export interface WorkspaceCreatePlan {
+    /** Human-readable title for the host-owned terminal run. */
+    title: string;
+    /**
+     * Shell source interpreted by the host's login shell, run from the request's
+     * source workspace. Any workspace path used here must be the absolute
+     * `request.path` supplied in the request, and must be shell-quoted by the
+     * provider. Keep the creation in the foreground: the host records completion
+     * when the shell exits, and the new workspace is listed only afterwards.
+     */
+    command: string;
+    /** Absolute path the command creates; must equal the requested path. */
+    path: string;
+    /** Label the new workspace is expected to be listed under. */
+    label: string;
+    /** User-facing confirmation of what will be created and what will run. */
+    confirmation: string;
 }
 /**
  * Plugin-authored plan for a visible host terminal run. Returning this plan

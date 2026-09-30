@@ -28,6 +28,12 @@ export interface PluginCapabilityProvision<Value = unknown, Version extends numb
 export interface WorkspaceProviderCapabilities {
     /** True only when this specific workspace advertises removal. */
     readonly remove: boolean;
+    /**
+     * True when the owning provider can create additional workspaces for the
+     * project. Creation is project-scoped, so this is the same answer on every
+     * workspace of one project.
+     */
+    readonly create: boolean;
 }
 /** Public identity and browser-visible data for the plugin that owns a workspace. */
 export interface WorkspaceProviderMetadata {
@@ -39,6 +45,13 @@ export interface WorkspaceProviderMetadata {
 export interface WorkspaceRemovalPresentation {
     readonly actionLabel: string;
     readonly confirmation: string;
+}
+/** Provider-authored creation affordance for one project, exposed to browser plugins. */
+export interface WorkspaceCreationPresentation {
+    /** Label for the create action, e.g. "New worktree". */
+    readonly actionLabel: string;
+    /** Commit-ish the provider suggests for a new workspace, when it has a preference. */
+    readonly defaultBaseRef?: string;
 }
 export interface FileTreeEntry {
     name: string;
